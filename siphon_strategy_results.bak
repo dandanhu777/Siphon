@@ -1,0 +1,20 @@
+Symbol,Name,Industry,Price,Change_Pct,AG_Score,AG_Details,Siphon_Ratio,Volume_Note
+512480,半导体ETF,ETF_Sector,1.0,0.1,16.7,VCP,16.666666666666668,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+512690,酒ETF,ETF_Sector,1.0,0.1,16.7,VCP,16.666666666666668,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+512010,医药ETF,ETF_Sector,1.0,0.1,16.7,VCP,16.666666666666668,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+518880,黄金ETF,ETF_Commodity,1.0,0.1,16.7,VCP,16.666666666666668,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+159915,创业板ETF,ETF_Index,1.0,0.1,16.7,VCP,16.666666666666668,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+515030,新能源车ETF,ETF_Sector,1.0,0.1,16.7,VCP,16.666666666666668,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+588000,科创50ETF,ETF_Index,1.0,0.1,16.7,VCP,16.666666666666668,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+510300,沪深300ETF,ETF_Index,1.0,0.1,16.7,VCP,16.666666666666668,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+513180,恒生科技ETF,ETF_CrossBorder,1.0,0.1,16.7,VCP,16.666666666666668,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+513050,中概互联ETF,ETF_CrossBorder,1.0,0.1,16.7,VCP,16.666666666666668,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+NVDA,NVIDIA,Semiconductor,135.5,2.5,9.9,RelStr VCP,9.9,VolRatio:2.0x
+00700,腾讯控股,互联网,320.5,2.3,8.8,VCP RelStr,2.1,VolRatio:1.5x
+2487,大金重工,风电设备,60.98,0.3620803159973595,8.4,VCP RelStr,8.35189003436433,"VolRatio:0.7x (vs Avg20d), VCP(Contraction)"
+03690,美团-W,互联网,95.2,1.5,7.5,RelStr,1.8,VolRatio:1.2x
+300373,扬杰科技,半导体,77.62,1.344823083953517,6.5,VCP RelStr,6.450483031954427,"VolRatio:1.2x (vs Avg20d), VCP(Contraction)"
+688728,格科微,半导体,17.05,2.772754671488853,3.1,VCP RelStr,3.1166405746385446,"VolRatio:1.0x (vs Avg20d), VCP(Contraction)"
+688052,纳芯微,半导体,190.37,2.4486061780217394,2.8,VCP RelStr,2.780974977642315,"VolRatio:0.8x (vs Avg20d), VCP(Contraction)"
+600776,东方通信,通信设备,19.93,4.949973670352814,2.4,VCP RelStr,2.385332624764483,"VolRatio:1.3x (vs Avg20d), VCP(Contraction)"
+600651,飞乐音响,光学光电子,8.89,7.1084337349397675,1.9,VCP RelStr,1.866349960411716,"VolRatio:1.4x (vs Avg20d), VCP(Contraction)"

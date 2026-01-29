@@ -1,0 +1,36 @@
+name: Daily Siphon Report
+
+on:
+  schedule:
+    # 08:30 UTC = 16:30 Beijing Time (Winter) / 16:30 (Summer) 
+    # Market closes at 15:00. 16:30 allows time for data settlement.
+    - cron: '30 8 * * 1-5'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run Siphon Strategy & Send Report
+      env:
+        MAIL_USER: ${{ secrets.MAIL_USER }}
+        MAIL_PASS: ${{ secrets.MAIL_PASS }}
+        # API Keys if needed
+        LLM_API_KEY: ${{ secrets.LLM_API_KEY }} 
+      run: |
+        python siphon_strategy.py
+        python fallback_email_sender.py

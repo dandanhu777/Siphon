@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.ipynb_checkpoints
+.DS_Store
+
+# Data Files (Keep structure but don't commit big data/cache)
+data_cache/
+backtest_cache/
+boomerang_tracker.db
+*.log
+siphon_strategy_results.csv
+siphon_strategy_results_partial.csv
+index_history_cache.csv
+index_multi_cache.json
+backtest_result*.csv
+
+# Secrets logic
+stock_recommendation_v*.backup/
