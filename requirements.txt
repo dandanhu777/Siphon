@@ -1,7 +1,7 @@
+openai
 akshare
 pandas
 requests
-OpenAi
 beautifulsoup4
 lxml
 schedule
