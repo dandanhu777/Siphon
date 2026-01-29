@@ -33,7 +33,8 @@ MAIL_RECEIVERS = [
     "8871802@qq.com",
     "171754089@qq.com",
     "840276240@qq.com",
-    "525624506@qq.com"
+    "525624506@qq.com",
+    "gaoyi@mininggoat.com"
 ]
 
 CSV_PATH = "siphon_strategy_results.csv"
