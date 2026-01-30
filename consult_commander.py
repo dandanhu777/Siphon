@@ -10,7 +10,7 @@ import os
 # ================= 必须配置区 (USER CONFIG) =================
 # 1. API Configuration (Local Proxy)
 API_KEY = "sk-ff1c3f6a304b456d8584291e76fb4742"
-BASE_URL = "http://127.0.0.1:8045/v1"
+BASE_URL = "http://39.97.254.198:8045/v1"
 MODEL_NAME = "gemini-2.5-flash"
 
 # 2. 邮箱配置 (SMTP)
