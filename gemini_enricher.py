@@ -4,7 +4,7 @@ import os
 
 # Config
 API_KEY = "sk-ff1c3f6a304b456d8584291e76fb4742"
-BASE_URL = "http://127.0.0.1:8045/v1"
+BASE_URL = "http://39.97.254.198:8045/v1"
 MODEL_NAME = "gemini-2.5-flash"
 
 def enrich_top_picks(stock_list):
