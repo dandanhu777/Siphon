@@ -24,7 +24,13 @@ MAIL_RECEIVERS = [
      "milsica@gmail.com",
      "tosinx@gmail.com",
      "32598630@qq.com",
-     "840276240@qq.com"
+     "840276240@qq.com",
+     "874686267@qq.com",
+     "zhengzheng.duan@kone.com",
+     "8871802@qq.com",
+     "171754089@qq.com",
+     "525624506@qq.com",
+     "gaoyi@mininggoat.com"
 ]
 
 # 3. 公开研报背景 (Public Context)
