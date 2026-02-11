@@ -1,3 +1,4 @@
+print("DEBUG: Script started...")
 import smtplib
 from email.mime.text import MIMEText
 from email.header import Header
@@ -9,38 +10,53 @@ import time
 import os
 import random
 
-from index_service import get_benchmark_return
+from index_service import get_benchmark_return, update_index_cache
 
 # Import Enrichment
-try:
-    from gemini_enricher import enrich_top_picks
-except ImportError:
+if os.environ.get("SKIP_AI"):
     enrich_top_picks = lambda x: {}
+    print("⚠️ AI Enrichment Disabled (SKIP_AI=1)")
+else:
+    try:
+        from gemini_enricher import enrich_top_picks
+    except ImportError:
+        enrich_top_picks = lambda x: {}
 
 # --- Configuration ---
 MAIL_HOST = "smtp.gmail.com"
 MAIL_PORT = 465
 # Use Environment Variables for Security (GitHub Actions) with Local Fallback
-MAIL_USER = os.environ.get("MAIL_USER", "leavertondrozdowskisu239@gmail.com")
-MAIL_PASS = os.environ.get("MAIL_PASS", "saimfxiilntucmph")
-MAIL_RECEIVERS = [
-    "28595591@qq.com",
-    "89299772@qq.com",
-    "milsica@gmail.com",
-    "tosinx@gmail.com",
-    "874686267@qq.com",
-    "zhengzheng.duan@kone.com",
-    "8871802@qq.com",
-    "171754089@qq.com",
-    "840276240@qq.com",
-    "525624506@qq.com",
-    "gaoyi@mininggoat.com"
-]
+MAIL_USER = os.environ.get("MAIL_USER")
+MAIL_PASS = os.environ.get("MAIL_PASS")
+
+# Receivers from Env (Comma separated) or Default
+env_receivers_str = os.environ.get("MAIL_RECEIVERS_LIST")
+if env_receivers_str:
+    MAIL_RECEIVERS = [x.strip() for x in env_receivers_str.split(",")]
+else:
+    # Minimal fallback or empty
+    MAIL_RECEIVERS = ["tosinx@gmail.com"] # Default fallback
 
 CSV_PATH = "siphon_strategy_results.csv"
+
+# Env Override
+env_receiver = os.environ.get("MAIL_RECEIVER")
+if env_receiver:
+    print(f"⚠️ [TEST MODE] Overriding Receivers: {env_receiver}")
+    MAIL_RECEIVERS = [env_receiver]
+
+print(f"🚀 Starting Report Generation. CSV: {CSV_PATH}")
+if os.path.exists(CSV_PATH):
+    print("✅ CSV File Found.")
+else:
+    print("❌ CSV File NOT Found.")
 DB_PATH = "boomerang_tracker.db"
 
-# --- Helpers ---
+# --- v7.0.4 Data Inspector Module (extracted) ---
+from data_inspector import DataInspector
+
+# Global inspector instance
+inspector = DataInspector(CSV_PATH)
 
 def get_stock_link(code):
     market = "sh" if code.startswith("6") else "sz"
@@ -104,6 +120,20 @@ class DirectSinaFetcher:
         self.fetch_prices([symbol])
         return self.price_map.get(symbol, None)
 
+# --- v7.0 Logging System ---
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("SiphonSystem")
+
+# --- v7.0 KlineCache + Shield (extracted modules) ---
+from kline_cache import KlineCache
+from shield_service import ShieldService
+
+# Global KlineCache instance
+kline_cache = KlineCache()
+
+# ShieldService imported above
+
 # Global Instance
 fetcher = DirectSinaFetcher()
 
@@ -112,20 +142,49 @@ def fetch_enhanced_tracking_data(industry_map={}):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic FROM recommendations ORDER BY rec_date ASC")
+        cursor.execute("SELECT stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic FROM recommendations ORDER BY rec_date DESC, siphon_score DESC, id ASC")
+        # Ordered by Date DESC (Newest first), then Score DESC (Best first)
         all_rows = cursor.fetchall()
         conn.close()
         
-        # Dedup Logic
-        dedup_map = {}
+        # 1. Group by Date to enforce "Top 3 Per Day"
+        date_groups = {}
         for r in all_rows:
+            d = r[3] # rec_date
+            if d not in date_groups: date_groups[d] = []
+            date_groups[d].append(r)
+            
+        # 2. Filter Top 3
+        filtered_rows = []
+        for d in sorted(date_groups.keys(), reverse=True):
+             # They are already sorted by Score DESC in SQL
+             day_picks = date_groups[d]
+             # KEEP TOP 3
+             top3 = day_picks[:3]
+             filtered_rows.extend(top3)
+        
+        # 3. Proceed with existing logic using filtered_rows
+        # Dedup Logic: Keep the OLDEST rec_date for each stock.
+        # This ensures stocks that were recommended previously maintain their
+        # original tracking date and don't get lost when re-recommended today.
+        dedup_map = {}
+        # Iterate from Newest to Oldest (filtered_rows is roughly Newest->Oldest dates)
+        for r in filtered_rows:
             code = r[0]
             if code not in dedup_map:
                 dedup_map[code] = {'row': r, 'count': 1}
             else:
-                dedup_map[code]['count'] += 1
-                
-        sorted_codes = sorted(dedup_map.values(), key=lambda x: x['row'][3])
+                # Keep the OLDEST rec_date (overwrite with older entry)
+                existing_date = dedup_map[code]['row'][3]
+                current_date = r[3]
+                if current_date < existing_date:
+                    dedup_map[code] = {'row': r, 'count': dedup_map[code]['count'] + 1}
+                else:
+                    dedup_map[code]['count'] += 1
+        
+        sorted_codes = sorted(dedup_map.values(), key=lambda x: x['row'][3]) # Sort by Date ASC for processing logic
+        
+        # ... logic continues ...
         
         # v4.4 Fix: Exclude T+0 (Today's picks) from History Tracking
         # v4.5 Req: History Review 15 trading days (~25 calendar days)
@@ -193,7 +252,7 @@ def fetch_enhanced_tracking_data(industry_map={}):
                         if not df_hist.empty:
                             verified_price = float(df_hist.iloc[-1]['close'])
                             break
-                    except:
+                    except Exception:
                         time.sleep(1)
                 
                 if verified_price is not None:
@@ -224,30 +283,35 @@ def fetch_enhanced_tracking_data(industry_map={}):
                          if not df_info.empty:
                              bus = df_info.iloc[0].get('主营业务')
                              if bus: final_logic = bus[:50] + "..."
-                     except:
+                     except Exception:
                         pass
-                 except: pass
+                 except Exception: pass
 
-            # v6.3: Calculate Max Return Since Recommendation
+            # v9.0: Calculate Max Return Since Recommendation (using KlineCache)
             max_ret_str = "-"
+            max_ret_val = 0.0
             try:
-                # Fetch history from RecDate to Today to find Max High
                 if days > 0:
-                    prefix = "sz" if code.startswith("0") or code.startswith("3") else "sh"
-                    long_code = prefix + code
-                    today_str_clean = datetime.date.today().strftime("%Y%m%d")
-                    rec_dt_str_clean = rec_date_str.replace("-", "")
-                    
-                    # 1 Call to get range
-                    df_max = ak.stock_zh_a_daily(symbol=long_code, start_date=rec_dt_str_clean, end_date=today_str_clean, adjust="qfq")
-                    if not df_max.empty:
-                        max_high = float(df_max['high'].max())
-                        # Calculate Max Return
-                        if rec_price > 0:
-                             max_ret_val = ((max_high - rec_price) / rec_price) * 100
-                             # v6.5 Final: Bright Red Bold, Show Price and Return (Magnified to 16px for %)
-                             max_ret_str = f'<div style="color:#ef4444; font-weight:800; font-size:12px;">{max_high:.2f}</div><div style="color:#dc2626; font-weight:800; font-size:16px;">+{max_ret_val:.1f}%</div>'
-            except:
+                    # Use pre-fetched KlineCache instead of individual API call
+                    cached_max = kline_cache.get_max_high(code, rec_date_str)
+                    if cached_max is not None:
+                        max_high = float(cached_max)
+                    else:
+                        # Fallback to API if cache miss
+                        prefix = "sz" if code.startswith("0") or code.startswith("3") else "sh"
+                        long_code = prefix + code
+                        today_str_clean = datetime.date.today().strftime("%Y%m%d")
+                        rec_dt_str_clean = rec_date_str.replace("-", "")
+                        df_max = ak.stock_zh_a_daily(symbol=long_code, start_date=rec_dt_str_clean, end_date=today_str_clean, adjust="qfq")
+                        max_high = float(df_max['high'].max()) if not df_max.empty else curr_price
+                    # Ensure Current Price is considered (for T+0 or intraday breakout)
+                    if curr_price > max_high:
+                        max_high = curr_price
+                    # Calculate Max Return
+                    if rec_price > 0:
+                         max_ret_val = ((max_high - rec_price) / rec_price) * 100
+                         max_ret_str = f'<div style="color:#ef4444; font-weight:800; font-size:12px;">{max_high:.2f}</div><div style="color:#dc2626; font-weight:800; font-size:16px;">+{max_ret_val:.1f}%</div>'
+            except Exception:
                 pass
 
             final_data.append({
@@ -265,7 +329,8 @@ def fetch_enhanced_tracking_data(industry_map={}):
                 'score': score_val,
                 'industry': db_industry if db_industry else "Unknown",
                 'core_logic': final_logic,
-                'max_return': max_ret_str # v6.3 Field
+                'max_return': max_ret_str, # v6.3 Field
+                'max_val': max_ret_val # v6.8 Field for Logic
             })
         return final_data
     except Exception as e:
@@ -289,15 +354,120 @@ def generate_report():
     track_data = fetch_enhanced_tracking_data(industry_map)
     tracked_codes = {x['code'] for x in track_data}
     
+    # v7.0 Optimization: Pre-fetch K-line data for all tracked stocks
+    all_tracked_codes = [x['code'] for x in track_data]
+    if all_tracked_codes:
+        logger.info(f"🚀 v7.0 Optimization: Batch pre-fetching K-line data...")
+        kline_cache.prefetch(all_tracked_codes, shield_service=ShieldService)
+    
+    # v7.0.4 Data Inspector - Automated validation
+    global inspector
+    inspector = DataInspector()  # Reset for fresh check
+    inspector.run_all_checks(track_data)
+    
     # Filter candidates
     candidates = []
-    for _, row in df.sort_values(by=['AG_Score'], ascending=False).iterrows():
+    others_today = []
+    
+    # Sort by Score
+    sorted_df = df.sort_values(by=['AG_Score'], ascending=False)
+    
+    today_found = False
+    for _, row in sorted_df.iterrows():
         code_str = str(row['Symbol']).zfill(6)
-        if code_str not in tracked_codes:
-            candidates.append(row)
-            if len(candidates) >= 1: break # v4.5 Req: Only 1 Top Pick
+        
+        # Check date (Assuming CSV has Date column, usually row['Date'])
+        # If no Date column, assuming all result in CSV is fresh from today's run?
+        # siphon_candidates.csv is usually APPENDED? No, run.sh doesn't clear it?
+        # Actually usually siphon_strategy.py overwrites or appends?
+        # Let's assume the CSV contains *latest* run data if generated today.
+        # But wait, looking at generate_report logic, it didn't filter by date before.
+        # It just took everything in CSV?
+        # Line 281 `pd.read_csv`.
+        # Line 294 iterates `df`.
+        # If `siphon_candidates.csv` is the *daily output*, then all of it is Today.
+        
+        candidates.append(row)
             
-    df_top = pd.DataFrame(candidates)
+    # Top Pick (Only 1 for the Daily Section)
+    df_top = pd.DataFrame(candidates[:1]) if candidates else pd.DataFrame()
+    
+    # Runners Up (For History Section as T+0)
+    if len(candidates) > 1:
+        for row in candidates[1:]:
+            others_today.append(row)
+            
+    # Force Update Index Cache for T+0 Data
+    try: update_index_cache()
+    except Exception: pass
+
+    # Inject Runners Up into track_data (Limit to Top 3 Total = Rank 1 + Rank 2,3)
+    t0_count = 0
+    MAX_T0_DISPLAY = 2 
+    
+    for row in others_today:
+        if t0_count >= MAX_T0_DISPLAY: break
+    
+        code = str(row['Symbol']).zfill(6)
+        # Check if already in track_data (unlikely for T+0 unless re-running)
+        if code not in tracked_codes:
+            # v7.0.3 T+0 Benchmark - Use REAL-TIME index change
+            t0_ret = 0.0
+            t0_idx_str = "-"
+            try:
+                # Import real-time fetcher
+                from index_service import get_realtime_index_change, get_index_code_for_stock
+                
+                # Get real-time data
+                realtime_data = get_realtime_index_change()
+                
+                if realtime_data:
+                    idx_key = get_index_code_for_stock(code)
+                    if idx_key in realtime_data:
+                        t0_idx_val = realtime_data[idx_key]
+                        t0_idx_str = f"{t0_idx_val:+.2f}%"
+                        logger.info(f"T+0 Benchmark for {code}: Real-time {idx_key} = {t0_idx_str}")
+                else:
+                    # Fallback to cache if real-time unavailable
+                    import json
+                    cache_file = "index_multi_cache.json"
+                    if os.path.exists(cache_file):
+                        with open(cache_file, 'r') as f:
+                            cache = json.load(f)
+                        idx_key = get_index_code_for_stock(code)
+                        idx_data = cache.get(idx_key, {}).get("data", {})
+                        if idx_data:
+                            dates = sorted(idx_data.keys())
+                            if len(dates) >= 2:
+                                last_close = idx_data[dates[-1]]
+                                prev_close = idx_data[dates[-2]]
+                                t0_idx_val = ((last_close - prev_close) / prev_close) * 100
+                                t0_idx_str = f"{t0_idx_val:+.2f}%"
+            except Exception as e:
+                logger.warning(f"T+0 Benchmark error for {code}: {e}")
+
+            t0_item = {
+                'code': code,
+                'name': row['Name'],
+                'rec_price': float(row['Price']),
+                'price': float(row['Price']),
+                'return': 0.0,
+                'index_str': t0_idx_str,
+                'rec_date': datetime.date.today().strftime("%Y-%m-%d"),
+                'days': 0,
+                'strategy': row.get('Strategy', 'Siphon'),
+                'nth': t0_count + 2, # Start from Rank 2
+                't_str': "T+0 (New)",
+                'score': row['AG_Score'],
+                'industry': row.get('Industry', 'Unknown'),
+                'core_logic': row.get('Logic', 'Daily Candidate'),
+                'max_return': "-"
+            }
+            # Add to proper position (Top of table)
+            track_data.insert(t0_count, t0_item) # Insert specifically at top (0, 1, 2...)
+            tracked_codes.add(code)
+            t0_count += 1
+
     
     enrich_batch = []
     for _, row in df_top.iterrows():
@@ -310,14 +480,44 @@ def generate_report():
              
     print(f"Enriching {len(enrich_batch)} items via AI...")
     ai_data_map = enrich_top_picks(enrich_batch)
+    
+    # v7.1: Validation Check - Ensure AI data is not empty
+    if not ai_data_map or len(ai_data_map) == 0:
+        print("⚠️ AI enrichment returned empty data. Using emergency fallback...")
+        # Emergency fallback: use industry as business description
+        ai_data_map = {}
+        for item in enrich_batch:
+            code = item['code']
+            industry = item.get('industry', 'Unknown')
+            ai_data_map[code] = {
+                "business": f"属于{industry}行业" if industry != 'Unknown' else "待补充",
+                "us_bench": "-",
+                "target_price": "-"
+            }
+    else:
+        print(f"✅ AI enrichment successful: {len(ai_data_map)} stocks enriched")
+        # Debug: Show first enriched stock
+        first_code = list(ai_data_map.keys())[0] if ai_data_map else None
+        if first_code:
+            print(f"   Sample: {first_code} -> {ai_data_map[first_code].get('business', 'N/A')[:50]}...")
 
     # 3. HTML Builder
     table_style = "width: 100%; border-collapse: separate; border-spacing: 0; font-family: -apple-system, sans-serif; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); table-layout: fixed;"
     th_style = "padding: 8px 6px; background: #f8fafc; color: #64748b; text-align: left; font-weight: 600; font-size: 11px; letter-spacing: 0.5px; border-bottom: 2px solid #e2e8f0; vertical-align: bottom; line-height:1.3;"
     td_style = "padding: 10px 6px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; overflow: hidden;"
     
+    # Industry Summary (New Feature)
+    industry_html = ""
+    if 'Industry' in df_top.columns:
+        top_inds = df_top['Industry'].dropna().unique().tolist()
+        # Filter invalid
+        top_inds = [x for x in top_inds if x and x != '-' and x != 'Unknown']
+        if top_inds:
+            badges = "".join([f'<span style="background:#e0e7ff; color:#4338ca; padding:3px 8px; border-radius:12px; font-size:11px; font-weight:600; margin-right:6px; border:1px solid #c7d2fe;">{ind}</span>' for ind in top_inds])
+            industry_html = f'<div style="margin-bottom:12px; display:flex; align-items:center;"><span style="font-size:12px; font-weight:700; color:#475569; margin-right:8px;">🎯 涉及行业:</span>{badges}</div>'
+
     # Rec Table
-    rec_html = f'<table style="{table_style}">'
+    rec_html = industry_html + f'<table style="{table_style}">'
     rec_html += f'<thead><tr><th style="{th_style} width:15%;">标的/行业</th><th style="{th_style} width:12%;">虹吸分</th><th style="{th_style} width:20%;">价格 <br>(信号/目标)</th><th style="{th_style} width:38%;">AI 核心逻辑</th><th style="{th_style} width:15%;">美股对标</th></tr></thead><tbody>'
 
     for i, row in df_top.iterrows():
@@ -341,7 +541,7 @@ def generate_report():
                  df_info = aks.stock_profile_cninfo(symbol=symbol) # symbol is 6-digit code
                  if not df_info.empty:
                      ind = df_info.iloc[0].get('行业')
-             except: pass
+             except Exception: pass
         if not ind: ind = "Unknown"
 
         rec_html += f'<tr>'
@@ -366,10 +566,11 @@ def generate_report():
                     <tr>
                         <th style="{th_style} width:15%;">标的/行业</th>
                         <th style="{th_style} width:8%; text-align:center;">推荐当日分值</th>
-                        <th style="{th_style} width:30%;">AI 核心逻辑</th>
+                        <th style="{th_style} width:25%;">AI 核心逻辑</th>
                         <th style="{th_style} width:8%; text-align:center;">持有时间</th>
-                        <th style="{th_style} width:12%; text-align:right;">推荐日价格/现价</th>
-                        <th style="{th_style} width:10%; text-align:center;">现有收益</th>
+                        <th style="{th_style} width:10%; text-align:right;">推荐日价格/现价</th>
+                        <th style="{th_style} width:9%; text-align:center;">现有收益</th>
+                        <th style="{th_style} width:10%; text-align:center;">操作建议</th>
                         <th style="{th_style} width:9%; text-align:center;">最高收益</th>
                         <th style="{th_style} width:8%; text-align:center;">同期大盘</th>
                     </tr>
@@ -380,6 +581,9 @@ def generate_report():
             enrich = ai_data_map.get(item['code'], {})
             link = get_stock_link(item['code'])
             ret = item['return']
+            
+            # v6.7 Shield v2 Logic
+            _, action_text, action_bg, action_fg = ShieldService.evaluate(item['code'], item['price'], item['days'], ret, max_return_pct=item.get('max_val', 0.0), kline_cache=kline_cache)
             ret_color = "#dc2626" if ret > 0 else "#16a34a"
             idx_str = item['index_str']
             idx_color = "#64748b"
@@ -398,7 +602,9 @@ def generate_report():
             track_html += f'<td style="{td_style} text-align:center; font-weight:bold; color:#64748b; font-size:11px;">{item["t_str"]}</td>'
             track_html += f'<td style="{td_style} text-align:right; font-size:10px;"><div style="color:#94a3b8;">{item["rec_price"]:.2f}</div><div style="font-weight:bold; color:#334155; font-size:12px;">{item["price"]:.2f}</div></td>'
             track_html += f'<td style="{td_style} text-align:center; font-weight:bold; font-size:12px; color:{ret_color};">{ret:+.2f}%</td>'
+            track_html += f'<td style="{td_style} text-align:center;"><span style="background:{action_bg}; color:{action_fg}; padding:4px 8px; border-radius:4px; font-weight:800; font-size:11px; display:inline-block; min-width:50px;">{action_text}</span></td>' 
             track_html += f'<td style="{td_style} text-align:center; font-size:11px;">{item["max_return"]}</td>'
+
             track_html += f'<td style="{td_style} text-align:center; font-size:11px; color:{idx_color}; background:#f8fafc;">{idx_str}</td>'
             track_html += '</tr>'
         track_html += '</tbody></table></div>'
@@ -406,14 +612,14 @@ def generate_report():
 
     full_html = f"""
     <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 720px; margin: 0 auto; color: #1e293b; background: #ffffff;">
-        <div style="text-align:center; padding: 25px 0;">
-            <div style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">短线虹吸精选 (v6.5)</div>
+    <div style="text-align:center; padding: 25px 0;">
+            <div style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">短线虹吸精选 (v8.0.0)</div>
             <div style="font-size:13px; color:#64748b; margin-top:6px;">{current_time}</div>
         </div>
         
         <div style="background: linear-gradient(to bottom right, #f8fafc, #ffffff); border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0; box-shadow: 0 4px 6px -2px rgba(0,0,0,0.03);">
             <div style="font-weight: 700; color: #334155; font-size: 15px; display: flex; align-items: center; margin-bottom: 20px;">
-                <span style="background:#dbeafe; width:8px; height:8px; border-radius:50%; margin-right:8px;"></span> 策略核心机制 (Mechanism)
+                <span style="background:#dbeafe; width:8px; height:8px; border-radius:50%; margin-right:8px;"></span> 策略核心进入机制 (Entry Mechanism)
             </div>
             
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; font-size: 12px; color: #475569; line-height: 1.6;">
@@ -443,6 +649,67 @@ def generate_report():
         
         {track_html}
         
+        
+        <div style="background: linear-gradient(to bottom right, #fff1f2, #ffffff); border: 1px solid #ffe4e6; border-radius: 12px; padding: 20px; margin: 25px 0; box-shadow: 0 4px 6px -2px rgba(0,0,0,0.03);">
+            <div style="font-weight: 700; color: #be123c; font-size: 15px; display: flex; align-items: center; margin-bottom: 20px;">
+                <span style="background:#fda4af; width:8px; height:8px; border-radius:50%; margin-right:8px;"></span> 策略核心退出机制 (Exit Mechanism)
+            </div>
+            
+            <div style="font-size: 12px; color: #334155; line-height: 1.6;">
+                <div style="margin-bottom: 15px;">
+                    <div style="color:#e11d48; font-weight:700; margin-bottom:4px;">1. 初始化: 防御基准 (Hard Exit)</div>
+                    <div><span style="background:#ffe4e6; color:#9f1239; padding:0 4px; border-radius:3px;">生存锁</span>: 触及 <strong>-7%</strong> 立即清算。无条件执行，防止非线性亏损螺旋。</div>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <div style="color:#d97706; font-weight:700; margin-bottom:4px;">2. 滞涨过滤: 资本效率 (Soft Exit)</div>
+                    <div><span style="background:#fffbeb; color:#b45309; padding:0 4px; border-radius:3px;">机会成本</span>: 持仓 <strong>>5天浮亏</strong> 或 <strong>>10天僵滞</strong>，视为动量失效，立即回收资金。</div>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <div style="color:#059669; font-weight:700; margin-bottom:4px;">3. 动量捕获: 合成凸性 (Smart Exit)</div>
+                    <div><span style="background:#ecfdf5; color:#047857; padding:0 4px; border-radius:3px;">Trailing Stop</span>: 利润 >15% 后激活追踪止损 (回撤5%)，只做右侧离场，让利润奔跑。</div>
+                </div>
+
+                <div>
+                    <div style="color:#7c3aed; font-weight:700; margin-bottom:4px;">4. 环境感知: 主动防御 (De-risk)</div>
+                    <div><span style="background:#f3e8ff; color:#6d28d9; padding:0 4px; border-radius:3px;">Technical Warning</span>: 出现 MACD 死叉或破位时，主动降低仓位敞口。</div>
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Scoring Logic Appendix (Chinese) -->
+        <div style="margin: 25px 0; border-top: 1px solid #f1f5f9; padding-top: 15px;">
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase;">技术附录: 综合评分模型 v5.1 (满分 100)</div>
+            <div style="font-size: 10px; color: #64748b; line-height: 1.5; font-family: Consolas, Monaco, monospace; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span><strong>1. 逆势抗跌 (30分)</strong></span>
+                    <span>指数大跌时的韧性表现 (权重: 3.0)</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span><strong>2. 相对强度 (25分)</strong></span>
+                    <span>加权超额收益 Alpha (5日:50%, 10日:30%, 20日:20%)</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span><strong>3. 机构资金 (20分)</strong></span>
+                    <span>吸筹信号 (口袋支点 / 缩量洗盘 / 巨量突破)</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span><strong>4. 安全边际 (15分)</strong></span>
+                    <span>ATR 波动率评级 (A级&lt;2%=15分, B级&lt;4%=10分)</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span><strong>5. 板块动量 (5分)</strong></span>
+                    <span>所属行业涨幅排名前 40% (+5分)</span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                    <span><strong>6. VCP 形态 (5分)</strong></span>
+                    <span>波动收敛 (Volatility Contraction) 且量能枯竭 (+5分)</span>
+                </div>
+            </div>
+        </div>
+
         <!-- Disclaimer -->
         <div style="margin: 30px 0 10px 0; padding: 15px; background: #fef2f2; border: 1px solid #fee2e2; border-radius: 8px; text-align: center;">
             <div style="color: #dc2626; font-weight: 700; font-size: 12px; margin-bottom: 5px;">⚠️ 风险提示 (Risk Warning)</div>
@@ -460,15 +727,25 @@ def generate_report():
     msg = MIMEText(full_html, 'html', 'utf-8')
     msg['From'] = Header("AI 参谋部", 'utf-8')
     msg['To'] = Header("Commander", 'utf-8')
-    msg['Subject'] = Header(f"✨ 短线虹吸精选 v6.5: 深度研报 (HK Excluded)", 'utf-8')
-    try:
-        smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=30)
-        smtp.login(MAIL_USER, MAIL_PASS)
-        smtp.sendmail(MAIL_USER, MAIL_RECEIVERS, msg.as_string())
-        smtp.quit()
-        print("✅ Report sent successfully.")
-    except Exception as e:
-        print(f"❌ Email Error: {e}")
+    today_date = datetime.date.today().strftime("%m/%d")
+    msg['Subject'] = Header(f"✨ 短线虹吸精选 v8.0.0: 深度研报 ({today_date})", 'utf-8')
+    # v7.0.1: Add retry logic for SSL errors
+    for attempt in range(3):
+        try:
+            logger.info(f"📧 Sending email (attempt {attempt+1}/3)...")
+            smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=60)
+            smtp.login(MAIL_USER, MAIL_PASS)
+            smtp.sendmail(MAIL_USER, MAIL_RECEIVERS, msg.as_string())
+            smtp.quit()
+            logger.info("✅ Report sent successfully.")
+            print("✅ Report sent successfully.")
+            break
+        except Exception as e:
+            logger.warning(f"Email attempt {attempt+1} failed: {e}")
+            if attempt == 2:
+                print(f"❌ Email Error (all attempts failed): {e}")
+            else:
+                time.sleep(2)  # Wait before retry
 
 if __name__ == "__main__":
     generate_report()

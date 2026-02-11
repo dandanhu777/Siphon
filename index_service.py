@@ -3,6 +3,52 @@ import pandas as pd
 import os
 import datetime
 import json
+import requests
+
+# v7.0.3 Real-time Index Fetcher (Tencent)
+def get_realtime_index_change():
+    """
+    Fetch real-time index change from Tencent API.
+    Returns: dict {idx_key: change_pct}
+    """
+    result = {}
+    try:
+        url = 'http://qt.gtimg.cn/q=sh000001,sz399001,sh000688,sz399006'
+        r = requests.get(url, timeout=10)
+        lines = r.text.strip().split(';')
+        
+        mapping = {
+            '上证指数': 'sh000001',
+            '深证成指': 'sz399001', 
+            '科创50': 'sh000688',
+            '创业板指': 'sz399006'
+        }
+        
+        for line in lines:
+            if line.strip():
+                parts = line.split('~')
+                if len(parts) > 32:
+                    name = parts[1]
+                    change_pct = float(parts[32]) if parts[32] else 0.0
+                    idx_key = mapping.get(name)
+                    if idx_key:
+                        result[idx_key] = change_pct
+    except Exception as e:
+        print(f"⚠️ Real-time index fetch error: {e}")
+    return result
+
+def verify_index_data():
+    """
+    v7.0.3 Verification Module: Cross-check cache vs real-time.
+    """
+    print("🔍 Verifying Index Data...")
+    realtime = get_realtime_index_change()
+    if realtime:
+        print(f"   ✅ Real-time: SSEC={realtime.get('sh000001', 'N/A')}%, SZI={realtime.get('sz399001', 'N/A')}%")
+    else:
+        print("   ⚠️ Real-time data unavailable")
+    return realtime
+
 
 # Cache for multiple indices
 INDEX_CACHE_FILE = "index_multi_cache.json"
@@ -36,7 +82,7 @@ def update_index_cache():
     if os.path.exists(INDEX_CACHE_FILE):
         try:
            with open(INDEX_CACHE_FILE, 'r') as f: cache = json.load(f)
-        except: pass
+        except Exception: pass
         
     for key, symbol in TARGET_INDICES.items():
         print(f"   - Updating {key} ({symbol})...")
@@ -49,13 +95,16 @@ def update_index_cache():
                 
             if not df.empty:
                 df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-                # Store as date->close map
+                # Store as date->close map (trim to last 60 trading days)
                 data_map = dict(zip(df['date'], df['close']))
+                sorted_dates = sorted(data_map.keys())
+                if len(sorted_dates) > 60:
+                    data_map = {d: data_map[d] for d in sorted_dates[-60:]}
                 cache[key] = {
                     "updated": datetime.datetime.now().strftime("%Y-%m-%d"),
                     "data": data_map
                 }
-                print(f"     ✅ Success ({len(df)} rows)")
+                print(f"     ✅ Success ({len(data_map)} days)")
         except Exception as e:
             print(f"     ❌ Failed {key}: {e}")
             
@@ -74,7 +123,7 @@ def get_benchmark_return(start_date_str, stock_code=None):
     
     try:
         with open(INDEX_CACHE_FILE, 'r') as f: cache = json.load(f)
-    except: return None
+    except Exception: return None
     
     # Check staleness
     idx_data = cache.get(idx_key, {})

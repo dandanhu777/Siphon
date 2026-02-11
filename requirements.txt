@@ -2,8 +2,4 @@ openai
 akshare
 pandas
 requests
-beautifulsoup4
-lxml
-schedule
-google-generativeai
-emoji
+python-dotenv

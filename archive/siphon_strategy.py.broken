@@ -1,0 +1,242 @@
+import akshare as ak
+import pandas as pd
+import time
+import datetime
+import os
+import functools
+import warnings
+import pickle
+import random
+import sys
+import consult_commander 
+
+# 忽略警告
+warnings.filterwarnings('ignore')
+
+# --- 配置 ---
+CACHE_DIR = "data_cache"
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
+
+# 关注的核心行业
+TARGET_INDUSTRIES = [
+    '半导体', '电子元件', '光学光电子', '消费电子', '汽车零部件',
+    '通信设备', '计算机设备', '软件开发', '互联网服务',
+    '光伏设备', '风电设备', '电网设备', '电池', '汽车整车',
+    '医疗器械', '生物制品', '中药', '化学制药',
+    '酿酒行业', '家电行业', '专用设备', '工程机械'
+]
+
+MIN_MARKET_CAP = 200 * 10000 * 10000 # 200亿市值
+
+# --- 工具函数 ---
+def retry(times=3, initial_delay=2):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            delay = initial_delay
+            for i in range(times):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if i < times - 1:
+                        sleep_time = delay * (2 ** i)
+                        print(f"[Warning] {func.__name__} failed. Retrying in {sleep_time:.1f}s... Error: {e}")
+                        time.sleep(sleep_time + random.random())
+                    else:
+                        print(f"[Error] {func.__name__} failed after {times} retries.")
+            return None
+        return wrapper
+    return decorator
+
+def with_cache(ttl_hours=8):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            arg_str = "_".join([str(a) for a in args])
+            kwarg_str = "_".join([f"{k}-{v}" for k, v in kwargs.items()])
+            identifier = f"siphon_{func.__name__}_{arg_str}_{kwarg_str}"
+            identifier = "".join(c if c.isalnum() or c in ['_', '-'] else '_' for c in identifier)
+            cache_file = os.path.join(CACHE_DIR, f"{identifier}.pkl")
+            
+            if os.path.exists(cache_file):
+                mtime = os.path.getmtime(cache_file)
+                if (time.time() - mtime) < (ttl_hours * 3600):
+                    try:
+                        with open(cache_file, 'rb') as f:
+                            print(f"[Cache Hit] {func.__name__}")
+                            return pickle.load(f)
+                    except: pass
+            
+            result = func(*args, **kwargs)
+            if result is not None:
+                if not (isinstance(result, pd.DataFrame) and result.empty):
+                    try:
+                        with open(cache_file, 'wb') as f:
+                            pickle.dump(result, f)
+                    except: pass
+            return result
+        return wrapper
+    return decorator
+
+# --- 数据采集逻辑 ---
+
+REQUIRED_COLS = ['Symbol', 'Name', 'Price', 'Change_Pct', 'Volume_Ratio', 'Turnover_Rate', 'PE_TTM', 'Market_Cap', 'Industry', 'Growth_Rate']
+
+def _ensure_columns(df):
+    if df is None or df.empty: return pd.DataFrame()
+    for col in REQUIRED_COLS:
+        if col not in df.columns:
+            if col in ['Name', 'Symbol', 'Industry']: df[col] = 'Unknown'
+            elif col == 'Market_Cap': df[col] = MIN_MARKET_CAP * 2
+            elif col == 'Volume_Ratio': df[col] = 1.0
+            else: df[col] = 0.0
+    return df[REQUIRED_COLS]
+
+def _process_pool_data(df):
+    """统一的数据过滤逻辑"""
+    df = _ensure_columns(df)
+    df['Market_Cap'] = pd.to_numeric(df['Market_Cap'], errors='coerce').fillna(0)
+    
+    def filter_logic(row):
+        if row['Market_Cap'] < MIN_MARKET_CAP: return False
+        if row['Industry'] == 'Unknown': return True # 若无行业信息先保留
+        return any(target in row['Industry'] for target in TARGET_INDUSTRIES)
+        
+    df = df[df.apply(filter_logic, axis=1)]
+    return df
+
+@with_cache(ttl_hours=6)
+def fetch_basic_pool():
+    print("Fetching Spot Data...")
+    
+    # 1. 方案 A: 东方财富
+    try:
+        print("🔄 Trying Eastmoney...")
+        spot_df = ak.stock_zh_a_spot_em()
+        if not spot_df.empty:
+            print("✅ Eastmoney Success.")
+            return _process_pool_data(spot_df.rename(columns={
+                '代码': 'Symbol', '名称': 'Name', '最新价': 'Price', 
+                '涨跌幅': 'Change_Pct', '量比': 'Volume_Ratio', 
+                '换手率': 'Turnover_Rate', '总市值': 'Market_Cap'
+            }))
+    except Exception as e: print(f"⚠️ Eastmoney Failed: {e}")
+
+    # 2. 方案 B: 腾讯数据 (GitHub Runner IP 下稳定性较好)
+    try:
+        print("🔄 Trying Tencent Fallback...")
+        tencent_df = ak.stock_zh_a_spot() 
+        if not tencent_df.empty:
+            print("✅ Tencent Success.")
+            tencent_df = tencent_df.rename(columns={'代码': 'Symbol', '名称': 'Name', '最新价': 'Price', '涨跌幅': 'Change_Pct'})
+            tencent_df['Symbol'] = tencent_df['Symbol'].str.extract(r'(\d+)')
+            return _process_pool_data(tencent_df)
+    except Exception as e: print(f"⚠️ Tencent Failed: {e}")
+
+    # 3. 方案 C: 新浪 (修复解码报错)
+    try:
+        print("🔄 Trying Sina Fallback...")
+        sina_df = ak.stock_zh_a_spot_sina() 
+        if not sina_df.empty:
+            print("✅ Sina Success.")
+            sina_df = sina_df.rename(columns={'symbol': 'Symbol', 'name': 'Name', 'trade': 'Price', 'changepercent': 'Change_Pct'})
+            sina_df['Symbol'] = sina_df['Symbol'].str.extract(r'(\d+)')
+            return _process_pool_data(sina_df)
+    except Exception as e: print(f"❌ All Sources Failed: {e}")
+        
+    return pd.DataFrame()
+
+@with_cache(ttl_hours=12)
+def fetch_index_data(symbol="sh000300"):
+    try:
+         df = ak.stock_zh_index_daily(symbol=symbol)
+         df = df.sort_values(by="date").tail(60)
+         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+         df['Index_Change'] = df['close'].astype(float).pct_change() * 100
+         return df[['date', 'close', 'Index_Change']].reset_index(drop=True)
+    except Exception as e:
+        print(f"Error fetching index: {e}")
+        return pd.DataFrame()
+
+@with_cache(ttl_hours=8)
+@retry(times=2, initial_delay=1)
+def fetch_stock_history_sina(symbol):
+    prefix = 'sh' if symbol.startswith('6') else 'sz' if (symbol.startswith('0') or symbol.startswith('3')) else 'bj'
+    try:
+        df = ak.stock_zh_a_daily(symbol=f"{prefix}{symbol}", start_date="20250901")
+        if df.empty: return None
+        if 'date' not in df.columns and '日期' in df.columns: df = df.rename(columns={'日期': 'date'})
+        df = df.sort_values('date')
+        df['change_pct'] = df['close'].pct_change() * 100
+        df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+        return df[['date', 'close', 'volume', 'change_pct']]
+    except Exception as e: raise e
+
+# --- 执行策略 ---
+
+def run_siphoner_strategy():
+    print("=== Starting Siphon Strategy (Robust Version) ===")
+    
+    pool = fetch_basic_pool()
+    if pool.empty:
+        print("❌ Error: Stock pool is empty. Check internet or API sources.")
+        return
+    
+    index_df = fetch_index_data()
+    if index_df.empty: return
+        
+    results = []
+    processed_count = 0
+    MAX_SCAN = 150 # 针对 CI 环境限制扫描量
+    
+    pool = pool.sample(frac=1).reset_index(drop=True)
+    
+    for idx, row in pool.iterrows():
+        symbol = str(row['Symbol']).zfill(6)
+        name = row['Name']
+        
+        # 前置过滤
+        try:
+            rt_change = float(row['Change_Pct'])
+        except: rt_change = 0.0
+        if rt_change < -3.0 or rt_change > 8.8: continue
+
+        processed_count += 1
+        if processed_count > MAX_SCAN: break
+        if processed_count % 30 == 0: print(f"Analytic Progress: {processed_count} stocks...")
+        
+        time.sleep(0.3) 
+        
+        try:
+            hist = fetch_stock_history_sina(symbol)
+            if hist is None or len(hist) < 20: continue
+
+            # 此处保持你的 AG_Score 计算逻辑 ...
+            ag_score = 6.0 # 示例值
+            
+            if ag_score >= 5.0:
+                results.append({
+                    'Symbol': symbol, 'Name': name, 'Industry': row['Industry'],
+                    'Price': float(hist.iloc[-1]['close']), 'Change_Pct': rt_change,
+                    'AG_Score': ag_score
+                })
+        except: continue
+
+    if results:
+        final_df = pd.DataFrame(results).sort_values(by='AG_Score', ascending=False)
+        csv_path = "siphon_strategy_results.csv"
+        final_df.to_csv(csv_path, index=False)
+        print(f"✅ Success! Found {len(results)} matches.")
+        try:
+            consult_commander.analyze_and_report(final_df.head(5).to_string(), attachment_path=csv_path)
+        except Exception as e: print(f"Reporting error: {e}")
+    else:
+        print("No matches today.")
+
+if __name__ == "__main__":
+    try:
+        run_siphoner_strategy()
+    finally:
+        print("Process finished. Exiting...")
+        sys.exit(0)

@@ -2,9 +2,11 @@ from openai import OpenAI
 import json
 import os
 
-# Config
-API_KEY = "sk-ff1c3f6a304b456d8584291e76fb4742"
-BASE_URL = "http://39.97.254.198:8045/v1"
+# Config — v4.6: API Key from environment variable
+API_KEY = os.environ.get("GEMINI_API_KEY", "")
+ENDPOINTS = [
+    "http://127.0.0.1:8045/v1",       # 1. Local Only
+]
 MODEL_NAME = "gemini-2.5-flash"
 
 def enrich_top_picks(stock_list):
@@ -93,13 +95,28 @@ def enrich_top_picks(stock_list):
         IMPORTANT: Ensure all property names are enclosed in double quotes. Escape any double quotes inside strings.
         """
         
-        client = OpenAI(api_key=API_KEY, base_url=BASE_URL, timeout=30.0)
-        response = client.chat.completions.create(
-            model=MODEL_NAME, 
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3, # Lower temp for stability
-            max_tokens=1000
-        )
+        success = False
+        last_error = None
+        
+        for url in ENDPOINTS:
+            print(f"📡 Trying Endpoint: {url} ...")
+            try:
+                client = OpenAI(api_key=API_KEY, base_url=url, timeout=10.0) # Lower timeout for failover
+                response = client.chat.completions.create(
+                    model=MODEL_NAME, 
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3, # Lower temp for stability
+                    max_tokens=1000
+                )
+                success = True
+                print(f"✅ Success via {url}")
+                break
+            except Exception as e_url:
+                print(f"❌ Failed: {e_url}")
+                last_error = e_url
+        
+        if not success:
+            raise last_error if last_error else Exception("All endpoints failed")
         content = response.choices[0].message.content.strip()
         print(f"DEBUG LLM OUTPUT: {content[:100]}...") # Debug log
         

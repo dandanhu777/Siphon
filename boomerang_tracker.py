@@ -129,17 +129,25 @@ def init_database():
     conn.close()
     print("✅ Boomerang database initialized")
 
-def add_recommendation(stock_code: str, stock_name: str, rec_price: float, strategy_tag: str = "", siphon_score: float = 3.0, industry: str = "", core_logic: str = "") -> int:
+def add_recommendation(stock_code: str, stock_name: str, rec_price: float, strategy_tag: str = "", siphon_score: float = 3.0, industry: str = "", core_logic: str = "", custom_date=None) -> int:
     """
     Add a new recommendation to tracking
+    Args:
+        custom_date: Optional date string (YYYY-MM-DD) or datetime.date to use instead of today
     Returns: recommendation ID
     """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    rec_date = datetime.date.today()
+    if custom_date is not None:
+        if isinstance(custom_date, str):
+            rec_date = custom_date
+        else:
+            rec_date = custom_date.strftime('%Y-%m-%d') if hasattr(custom_date, 'strftime') else str(custom_date)
+    else:
+        rec_date = datetime.date.today().strftime('%Y-%m-%d')
     
-    # Check if already tracked today
+    # Check if already tracked on this date
     cursor.execute("""
         SELECT id FROM recommendations 
         WHERE stock_code = ? AND rec_date = ?
@@ -383,3 +391,122 @@ def calculate_strategy_metrics(strategy_tag: str = None) -> Dict:
 # Initialize database on import
 if not os.path.exists(DB_PATH):
     init_database()
+
+# --- v7.1 CSV Sync Module ---
+
+def sync_from_csv(csv_path="siphon_strategy_results.csv", rec_date=None):
+    """
+    v7.1: Sync daily recommendations from CSV to database.
+    Ensures each day's picks are persisted for T+1 to T+15 tracking.
+    """
+    if not os.path.exists(csv_path):
+        print(f"❌ CSV not found: {csv_path}")
+        return 0
+    
+    if rec_date is None:
+        rec_date = datetime.date.today().strftime("%Y-%m-%d")
+    
+    df = pd.read_csv(csv_path)
+    print(f"📥 Reading {len(df)} records from {csv_path}")
+    
+    inserted = 0
+    updated = 0
+    
+    for _, row in df.iterrows():
+        stock_code = str(row.get('Symbol', '')).zfill(6)
+        stock_name = row.get('Name', 'Unknown')
+        rec_price = float(row.get('Price', 0))
+        siphon_score = float(row.get('AG_Score', 0))
+        industry = row.get('Industry', 'Unknown')
+        strategy_tag = row.get('Strategy', 'Siphon')
+        core_logic = row.get('Logic', 'Daily Candidate')
+        
+        if not stock_code or rec_price <= 0:
+            continue
+        
+        # Check if already exists
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM recommendations WHERE stock_code = ? AND rec_date = ?",
+            (stock_code, rec_date)
+        )
+        existing = cursor.fetchone()
+        
+        if existing:
+            # Update existing record
+            cursor.execute("""
+                UPDATE recommendations 
+                SET rec_price = ?, siphon_score = ?, strategy_tag = ?, industry = ?, core_logic = ?
+                WHERE id = ?
+            """, (rec_price, siphon_score, strategy_tag, industry, core_logic, existing[0]))
+            updated += 1
+        else:
+            # Insert new record
+            cursor.execute("""
+                INSERT INTO recommendations (stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic))
+            inserted += 1
+        
+        conn.commit()
+        conn.close()
+    
+    print(f"✅ Sync complete: {inserted} inserted, {updated} updated for {rec_date}")
+    return inserted + updated
+
+# --- CLI Entry Point ---
+if __name__ == "__main__":
+    import sys
+    
+    # Adapter for update_daily_performance
+    def ak_fetcher_adapter(stock_code):
+        try:
+            # Determine prefix
+            if stock_code.startswith('6'): prefix = 'sh'
+            elif stock_code.startswith('0') or stock_code.startswith('3'): prefix = 'sz'
+            elif stock_code.startswith('8') or stock_code.startswith('4'): prefix = 'bj'
+            else: prefix = 'sh' # Default
+            
+            full_code = prefix + stock_code
+            # Fetch just today/latest
+            df = ak.stock_zh_a_daily(symbol=full_code, start_date=datetime.date.today().strftime("%Y%m%d"), end_date=datetime.date.today().strftime("%Y%m%d"))
+            
+            if df.empty:
+                # Try fetching a bit more history if today is empty (e.g. before market close)
+                start_dt = (datetime.date.today() - datetime.timedelta(days=5)).strftime("%Y%m%d")
+                df = ak.stock_zh_a_daily(symbol=full_code, start_date=start_dt, end_date=datetime.date.today().strftime("%Y%m%d"))
+            
+            if not df.empty:
+                last_row = df.iloc[-1]
+                # Try to calculate change_pct if missing
+                return {
+                    'close': float(last_row['close']),
+                    'change_pct': float(last_row.get('change_pct', 0.0)) # change_pct might be missing in some AK interfaces? normally present in daily
+                }
+            return None
+        except Exception as e:
+            print(f"Fetcher error for {stock_code}: {e}")
+            return None
+
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--sync":
+            # v7.1: Sync from CSV
+            csv_path = sys.argv[2] if len(sys.argv) > 2 else "siphon_strategy_results.csv"
+            rec_date = sys.argv[3] if len(sys.argv) > 3 else None
+            sync_from_csv(csv_path, rec_date)
+        elif sys.argv[1] == "--report":
+            # Generate basic tracking report
+            df = get_active_recommendations()
+            print(df.to_string())
+        elif sys.argv[1] == "--update":
+            # v8.0: Update Daily Performance
+            print("🔄 Updating daily performance for active tracks...")
+            update_daily_performance(ak_fetcher_adapter)
+        else:
+            print("Usage: python boomerang_tracker.py [--sync [csv_path] [rec_date]] [--report] [--update]")
+    else:
+        print("🔧 Boomerang Tracker v8.0")
+        print("  --sync [csv] [date]  : Sync CSV to database")
+        print("  --report             : Show active recommendations")
+        print("  --update             : Update daily performance from market (AKShare)")
