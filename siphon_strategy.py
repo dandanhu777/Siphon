@@ -445,34 +445,33 @@ def analyze_volume_anomaly(stock_hist):
 # --- v5.0 Enhanced Analysis ---
 
 def calc_relative_strength(stock_hist, index_hist):
-    """v5.1: Multi-timeframe relative strength (5/10/20 day alpha) using compounding returns."""
+    """v6.0: Short-term relative strength (3/5/10 day alpha).
+    Weighted: 3d=40%, 5d=35%, 10d=25%. Shorter windows for momentum capture.
+    """
     merged = pd.merge(stock_hist, index_hist, on='date', how='inner', suffixes=('', '_idx'))
-    if len(merged) < 21:
+    if len(merged) < 11:
         return 0.0, False
-    
+
     closes = merged['close']
-    idx_closes = merged['close_idx'] # Ensure index_hist has 'close' column (it does from fetch_index_data)
-    
-    # Stock returns over different periods
+    idx_closes = merged['close_idx']
+
+    stock_3d = (closes.iloc[-1] / closes.iloc[-4] - 1) * 100 if len(closes) > 3 else 0
     stock_5d = (closes.iloc[-1] / closes.iloc[-6] - 1) * 100 if len(closes) > 5 else 0
     stock_10d = (closes.iloc[-1] / closes.iloc[-11] - 1) * 100 if len(closes) > 10 else 0
-    stock_20d = (closes.iloc[-1] / closes.iloc[-21] - 1) * 100 if len(closes) > 20 else 0
-    
-    # Index returns (Actual Price Return, NOT sum of daily changes)
+
+    idx_3d = (idx_closes.iloc[-1] / idx_closes.iloc[-4] - 1) * 100 if len(idx_closes) > 3 else 0
     idx_5d = (idx_closes.iloc[-1] / idx_closes.iloc[-6] - 1) * 100 if len(idx_closes) > 5 else 0
     idx_10d = (idx_closes.iloc[-1] / idx_closes.iloc[-11] - 1) * 100 if len(idx_closes) > 10 else 0
-    idx_20d = (idx_closes.iloc[-1] / idx_closes.iloc[-21] - 1) * 100 if len(idx_closes) > 20 else 0
-    
-    # Alpha = stock excess return over index
+
+    alpha_3d = stock_3d - idx_3d
     alpha_5d = stock_5d - idx_5d
     alpha_10d = stock_10d - idx_10d
-    alpha_20d = stock_20d - idx_20d
-    
-    # Acceleration: short-term alpha > mid-term > long-term = strengthening
-    is_accelerating = alpha_5d > alpha_10d > alpha_20d > 0
-    
-    # Weighted RS score
-    rs = alpha_5d * 0.5 + alpha_10d * 0.3 + alpha_20d * 0.2
+
+    # Acceleration: short > mid > long and all positive
+    is_accelerating = alpha_3d > alpha_5d > alpha_10d > 0
+
+    # v6.0: Weighted RS (shorter windows weighted more)
+    rs = alpha_3d * 0.4 + alpha_5d * 0.35 + alpha_10d * 0.25
     return round(rs, 2), is_accelerating
 
 def detect_institutional_flow(stock_hist, lookback=10):
