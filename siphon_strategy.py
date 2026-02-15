@@ -549,6 +549,42 @@ def calc_safety_margin(stock_hist):
     elif atr_pct < 6.0: return 'C', round(atr_pct, 2)  # High
     else:               return 'D', round(atr_pct, 2)  # Dangerous
 
+def calc_volume_explosion(stock_hist):
+    """v6.0: Volume explosion scoring (0-20).
+    Measures today's volume vs 5-day average.
+    Core signal for short-term momentum ignition.
+    """
+    if len(stock_hist) < 6:
+        return 0.0, 1.0
+
+    today_vol = stock_hist['volume'].iloc[-1]
+    ma5_vol = stock_hist['volume'].iloc[-6:-1].mean()
+
+    if ma5_vol <= 0:
+        return 0.0, 1.0
+
+    vol_ratio = today_vol / ma5_vol
+
+    # Scoring: higher ratio = higher score
+    if vol_ratio >= 4.0:
+        score = 20.0   # Extreme explosion
+    elif vol_ratio >= 3.0:
+        score = 16.0
+    elif vol_ratio >= 2.0:
+        score = 12.0
+    elif vol_ratio >= 1.5:
+        score = 8.0
+    elif vol_ratio >= 1.2:
+        score = 4.0
+    else:
+        score = 0.0
+
+    # Bonus: volume explosion on a green candle is stronger
+    if stock_hist['change_pct'].iloc[-1] > 0 and vol_ratio >= 2.0:
+        score = min(score + 2.0, 20.0)
+
+    return score, round(vol_ratio, 2)
+
 def calc_sector_momentum(pool_df, industry_col='Industry'):
     """v5.0: Rank sectors by momentum, return hot sector list."""
     try:
