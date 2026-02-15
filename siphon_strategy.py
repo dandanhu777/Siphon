@@ -853,7 +853,7 @@ def _save_and_report(results, csv_path, last_trading_date):
 # --- Runner ---
 
 def run_siphoner_strategy(market='CN', cfg=CONFIG):
-    print(f"=== Starting 'Siphon Strategy v5.0' (Market: {market}) ===")
+    print(f"=== Starting 'Siphon Strategy v6.0 — Aggressive Momentum' (Market: {market}) ===")
     
     if market == 'CN':
         pool = fetch_basic_pool()
@@ -926,7 +926,6 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
         # Step 2: Technical filtering
         tech_ok, rsi, stock_3d, vcp_signal = _filter_technicals(hist, change_pct, realtime_change_pct, cfg)
         if not tech_ok: continue
-        if not vcp_signal: continue
 
         # Limit-up check
         if realtime_change_pct > cfg.limit_up_threshold:
@@ -965,17 +964,17 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
         
         # Build signal tags
         signal_tags = []
-        if vcp_signal: signal_tags.append("VCP")
-        if is_accelerating: signal_tags.append("加速")
+        if vol_explosion_score >= 12: signal_tags.append(f"爆量{vol_ratio:.1f}x")
+        if momentum_accel_score >= 8.0: signal_tags.append("加速🚀")
+        if is_accelerating: signal_tags.append("RS加速")
         if flow_info['rising_floor']: signal_tags.append("底升")
         if flow_info['flow_ratio'] > 1.5: signal_tags.append("吸筹")
-        if momentum_accel_score >= 8.0: signal_tags.append("加速")
+        if vcp_signal: signal_tags.append("VCP")
+        if sector_leader_score >= 7: signal_tags.append("领涨")
         if rsi < 50: signal_tags.append("LowRSI")
-        signal_str = " ".join(signal_tags) if signal_tags else "Siphon"
+        signal_str = " ".join(signal_tags) if signal_tags else "Momentum"
 
-        vol_ratio_val = float(row['Volume_Ratio']) if row['Volume_Ratio'] != '-' else 1.0
-        vol_note = f"VolR:{vol_ratio_val:.1f}x Flow:{flow_info['flow_ratio']:.1f}"
-        if vcp_signal: vol_note += " VCP"
+        vol_note = f"VolR:{vol_ratio:.1f}x Flow:{flow_info['flow_ratio']:.1f}"
 
         symbol_str = str(symbol).zfill(6)
 
@@ -995,7 +994,7 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
             'Flow_Ratio': flow_info['flow_ratio'],
             'Composite': composite
         })
-        print(f"MATCH {name}: C={composite} AG={ag_score:.1f} RS={rs_score:.1f} VolExp={vol_explosion_score:.1f} MomAccel={momentum_accel_score:.1f}")
+        print(f"MATCH {name}: C={composite} RS={rs_score:.1f} Vol={vol_explosion_score:.0f} Accel={momentum_accel_score:.0f} Flow={flow_info['flow_ratio']:.1f} Sector={sector_leader_score:.0f}")
     
     # Step 4: Save and report
     _save_and_report(results, "siphon_strategy_results.csv", last_trading_date)
