@@ -674,33 +674,44 @@ def calc_sector_leader_score(symbol, is_hot_sector, sector_rankings):
     else:
         return 2.0   # In hot sector but not leading
 
-def calc_composite_score(ag_score, rs_score, flow_info, safety_grade,
-                         is_hot_sector, vcp_signal):
-    """v5.0: Composite scoring (0-100) replacing siphon_ratio."""
+def calc_composite_score(ag_score, rs_score, flow_info, is_hot_sector,
+                         vcp_signal, vol_explosion_score, momentum_accel_score,
+                         sector_leader_score):
+    """v6.0: Aggressive momentum composite scoring (0-100).
+
+    Weight allocation:
+    1. Relative Strength Alpha   — 30pts (core)
+    2. Volume Explosion          — 20pts (ignition signal)
+    3. Institutional Flow        — 20pts (smart money)
+    4. Momentum Acceleration     — 15pts (burst probability)
+    5. Sector Leader             — 10pts (leading hot sector)
+    6. Antigravity (resilience)  —  5pts (minor reference)
+    """
     score = 0.0
-    
-    # Antigravity (0-30): resilience during index drops
-    score += min(ag_score * 3.0, 30.0)
-    
-    # Relative Strength (0-25): multi-timeframe outperformance
-    score += max(min(rs_score * 2.5, 25.0), 0.0)
-    
-    # Institutional Flow (0-20): accumulation patterns
+
+    # 1. Relative Strength (0-30): multi-timeframe outperformance
+    score += max(min(rs_score * 3.0, 30.0), 0.0)
+
+    # 2. Volume Explosion (0-20): today's volume vs 5d avg
+    score += min(vol_explosion_score, 20.0)
+
+    # 3. Institutional Flow (0-20): accumulation patterns
     score += flow_info['score'] * 4.0  # max 5 * 4 = 20
-    
-    # Safety Margin (0-15): volatility-based
-    safety_map = {'A': 15.0, 'B': 10.0, 'C': 5.0, 'D': 0.0}
-    score += safety_map.get(safety_grade, 0.0)
-    
-    # Sector Momentum (0-5)
-    if is_hot_sector:
-        score += 5.0
-    
-    # VCP Pattern (0-5)
+
+    # 4. Momentum Acceleration (0-15): daily alpha increasing
+    score += min(momentum_accel_score, 15.0)
+
+    # 5. Sector Leader (0-10): rank within hot sector
+    score += min(sector_leader_score, 10.0)
+
+    # 6. Antigravity (0-5): minor resilience reference
+    score += min(ag_score * 0.5, 5.0)
+
+    # Bonus: VCP pattern still gets a small nudge (not scored independently)
     if vcp_signal:
-        score += 5.0
-    
-    return round(score, 1)
+        score += 2.0
+
+    return round(min(score, 100.0), 1)
 
 
 def fetch_hk_index_data(symbol="HSI", days=60):
@@ -922,26 +933,31 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
             print(f"Skip {name}: Daily Limit Up/Surge (+{realtime_change_pct:.2f}%)")
             continue
 
-        # Step 3: v5.0 Enhanced Scoring
+        # Step 3: v6.0 Enhanced Scoring
         ag_score, ag_details = calculate_antigravity_score(hist, index_df)
         if ag_score < cfg.min_ag_score:
             continue
 
-        # v5.0: Relative Strength
+        # v6.0: Relative Strength
         rs_score, is_accelerating = calc_relative_strength(hist, index_df)
-        
-        # v5.0: Institutional Flow
+
+        # v6.0: Institutional Flow
         flow_info = detect_institutional_flow(hist)
-        
-        # v5.0: Safety Margin
-        safety_grade, atr_pct = calc_safety_margin(hist)
-        if atr_pct > cfg.max_atr_pct:
-            continue  # Skip dangerously volatile stocks
-        
-        # v5.0: Composite Score (0-100)
+
+        # v6.0: Volume Explosion
+        vol_explosion_score, vol_ratio = calc_volume_explosion(hist)
+
+        # v6.0: Momentum Acceleration
+        momentum_accel_score, _ = calc_momentum_acceleration(hist, index_df)
+
+        # v6.0: Sector Leader Score
+        sector_leader_score = calc_sector_leader_score(symbol, is_hot_sector, sector_rankings)
+
+        # v6.0: Composite Score (0-100) with aggressive momentum weights
         composite = calc_composite_score(
-            ag_score, rs_score, flow_info, safety_grade,
-            is_hot_sector, vcp_signal
+            ag_score, rs_score, flow_info, is_hot_sector,
+            vcp_signal, vol_explosion_score, momentum_accel_score,
+            sector_leader_score
         )
         
         if composite < cfg.min_composite_score:
@@ -953,7 +969,7 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
         if is_accelerating: signal_tags.append("加速")
         if flow_info['rising_floor']: signal_tags.append("底升")
         if flow_info['flow_ratio'] > 1.5: signal_tags.append("吸筹")
-        if safety_grade in ('A', 'B'): signal_tags.append(f"安全{safety_grade}")
+        if momentum_accel_score >= 8.0: signal_tags.append("加速")
         if rsi < 50: signal_tags.append("LowRSI")
         signal_str = " ".join(signal_tags) if signal_tags else "Siphon"
 
@@ -973,12 +989,13 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
             'AG_Details': signal_str,
             'Volume_Note': vol_note,
             'RS_Score': rs_score,
-            'Safety': safety_grade,
-            'ATR_Pct': atr_pct,
+            'Vol_Explosion': vol_explosion_score,
+            'Momentum_Accel': momentum_accel_score,
+            'Sector_Leader': sector_leader_score,
             'Flow_Ratio': flow_info['flow_ratio'],
             'Composite': composite
         })
-        print(f"MATCH {name}: C={composite} AG={ag_score:.1f} RS={rs_score:.1f} Flow={flow_info['flow_ratio']:.1f} Safety={safety_grade}")
+        print(f"MATCH {name}: C={composite} AG={ag_score:.1f} RS={rs_score:.1f} VolExp={vol_explosion_score:.1f} MomAccel={momentum_accel_score:.1f}")
     
     # Step 4: Save and report
     _save_and_report(results, "siphon_strategy_results.csv", last_trading_date)
