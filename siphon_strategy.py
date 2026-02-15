@@ -627,24 +627,53 @@ def calc_momentum_acceleration(stock_hist, index_hist):
     return min(score, 15.0), is_accelerating
 
 def calc_sector_momentum(pool_df, industry_col='Industry'):
-    """v5.0: Rank sectors by momentum, return hot sector list."""
+    """v6.0: Sector momentum with per-stock ranking within sector.
+    Returns hot_sectors list AND a dict mapping industry -> stock rankings.
+    """
     try:
         sector_stats = pool_df.groupby(industry_col).agg(
             avg_change=('Change_Pct', lambda x: pd.to_numeric(x, errors='coerce').mean()),
             count=('Symbol', 'count')
         ).reset_index()
-        
-        # Only consider sectors with enough stocks
+
         sector_stats = sector_stats[sector_stats['count'] >= 3]
         if sector_stats.empty:
-            return [], sector_stats
-        
+            return [], sector_stats, {}
+
         sector_stats['momentum_rank'] = sector_stats['avg_change'].rank(pct=True)
         hot_sectors = sector_stats[sector_stats['momentum_rank'] > 0.4][industry_col].tolist()
-        return hot_sectors, sector_stats
+
+        # v6.0: Build per-sector stock ranking
+        sector_rankings = {}
+        for industry in hot_sectors:
+            sector_stocks = pool_df[pool_df[industry_col] == industry].copy()
+            sector_stocks['Change_Pct_num'] = pd.to_numeric(sector_stocks['Change_Pct'], errors='coerce')
+            sector_stocks['rank_in_sector'] = sector_stocks['Change_Pct_num'].rank(pct=True)
+            for _, srow in sector_stocks.iterrows():
+                sector_rankings[str(srow['Symbol']).zfill(6)] = srow['rank_in_sector']
+
+        return hot_sectors, sector_stats, sector_rankings
     except Exception as e:
         print(f"⚠️ Sector momentum calc error: {e}")
-        return [], pd.DataFrame()
+        return [], pd.DataFrame(), {}
+
+def calc_sector_leader_score(symbol, is_hot_sector, sector_rankings):
+    """v6.0: Sector leader scoring (0-10).
+    Rewards stocks that lead their hot sector.
+    """
+    if not is_hot_sector:
+        return 0.0
+
+    rank_pct = sector_rankings.get(symbol, 0.5)
+
+    if rank_pct >= 0.9:
+        return 10.0  # Top 10% in hot sector
+    elif rank_pct >= 0.7:
+        return 7.0   # Top 30%
+    elif rank_pct >= 0.5:
+        return 4.0   # Above median
+    else:
+        return 2.0   # In hot sector but not leading
 
 def calc_composite_score(ag_score, rs_score, flow_info, safety_grade,
                          is_hot_sector, vcp_signal):
@@ -835,8 +864,8 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
     last_trading_date = index_df['date'].iloc[-1]
     print(f"📅 Effective Analysis Date: {last_trading_date}")
 
-    # v5.0: Sector momentum pre-filter
-    hot_sectors, sector_stats = calc_sector_momentum(pool)
+    # v6.0: Sector momentum pre-filter with per-stock rankings
+    hot_sectors, sector_stats, sector_rankings = calc_sector_momentum(pool)
     if hot_sectors:
         print(f"🔥 Hot Sectors ({len(hot_sectors)}): {', '.join(hot_sectors[:8])}")
     else:
