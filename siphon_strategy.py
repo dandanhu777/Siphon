@@ -30,31 +30,30 @@ from dataclasses import dataclass
 
 @dataclass
 class StrategyConfig:
-    """v5.0: All tunable strategy parameters in one place."""
-    # Filtering thresholds
-    max_drop_pct: float = -3.0        # Guillotine: skip stocks down more than this
-    max_gain_5d: float = 15.0         # Anti-FOMO: skip if 5-day gain exceeds this
-    max_rsi: float = 75.0             # Overbought RSI threshold
-    limit_up_threshold: float = 8.5   # Skip daily limit-up stocks
-    max_swing_3d: float = 10.0        # Skip wild 3-day swings
+    """v6.0: Aggressive short-term momentum arbitrage config."""
+    # Filtering thresholds (relaxed for momentum)
+    max_drop_pct: float = -3.0
+    max_gain_5d: float = 25.0         # Relaxed from 15.0
+    max_rsi: float = 80.0             # Relaxed from 75.0
+    limit_up_threshold: float = 8.5
+    max_swing_3d: float = 15.0        # Relaxed from 10.0
     # Fundamental filters
-    min_growth: float = 10.0          # Minimum growth rate for PEG
-    high_growth: float = 30.0         # High growth rate (bypass PEG)
-    max_peg: float = 1.5              # Max PEG ratio
+    min_growth: float = 10.0
+    high_growth: float = 30.0
+    max_peg: float = 1.5
     # Technical filters
-    ma_period: int = 50               # Moving average trend period
-    min_avg_volume: int = 1_000_000   # Minimum 20-day avg volume
-    vcp_vol_ratio: float = 0.6        # VCP volume contraction ratio
-    vcp_steady_ratio: float = 1.5     # VCP steady volume ceiling
-    # Scoring (legacy)
-    min_ag_score: float = 5.0         # Minimum antigravity score
-    # v5.0: Safety margin
-    max_atr_pct: float = 5.0          # Max ATR% (volatility cap)
-    # v5.0: Composite scoring
-    min_composite_score: float = 40.0 # Minimum composite score (0-100)
-    sector_momentum_pct: float = 0.4  # Sector must be above this percentile
+    ma_period: int = 50
+    min_avg_volume: int = 1_000_000
+    vcp_vol_ratio: float = 0.6
+    vcp_steady_ratio: float = 1.5
+    # Scoring
+    min_ag_score: float = 2.0         # Lowered from 5.0
+    min_composite_score: float = 30.0 # Lowered from 40.0
+    sector_momentum_pct: float = 0.4
+    # v6.0: Momentum params
+    vol_explosion_multiplier: float = 2.0  # Volume explosion threshold
     # Processing
-    max_process: int = 300            # Max stocks to process per run
+    max_process: int = 300
 
 CONFIG = StrategyConfig()
 
