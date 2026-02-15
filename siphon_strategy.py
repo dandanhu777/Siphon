@@ -585,6 +585,47 @@ def calc_volume_explosion(stock_hist):
 
     return score, round(vol_ratio, 2)
 
+def calc_momentum_acceleration(stock_hist, index_hist):
+    """v6.0: Momentum acceleration scoring (0-15).
+    Detects daily alpha increasing pattern:
+    today's alpha > yesterday's > day before.
+    Accelerating stocks have highest short-term burst probability.
+    """
+    merged = pd.merge(stock_hist, index_hist, on='date', how='inner', suffixes=('', '_idx'))
+    if len(merged) < 6:
+        return 0.0, False
+
+    # Calculate daily alpha (stock return - index return)
+    merged['daily_alpha'] = merged['change_pct'] - merged['Index_Change']
+    recent = merged.tail(5)
+    alphas = recent['daily_alpha'].values
+
+    score = 0.0
+
+    # Pattern 1: Consecutive alpha increase (last 3 days)
+    if len(alphas) >= 3:
+        a1, a2, a3 = alphas[-3], alphas[-2], alphas[-1]
+        if a3 > a2 > a1:
+            score += 8.0  # Strong acceleration
+        elif a3 > a2 and a3 > 0:
+            score += 5.0  # Moderate acceleration
+        elif a3 > 0:
+            score += 2.0  # At least positive alpha today
+
+    # Pattern 2: 3-day cumulative alpha positive and growing
+    if len(alphas) >= 5:
+        alpha_3d = alphas[-3:].sum()
+        alpha_5d = alphas.sum()
+        if alpha_3d > 0 and alpha_3d > alpha_5d * 0.7:
+            score += 4.0  # Recent alpha concentrated in last 3 days
+
+    # Pattern 3: Today's alpha is the strongest in 5 days
+    if alphas[-1] == max(alphas) and alphas[-1] > 1.0:
+        score += 3.0
+
+    is_accelerating = score >= 8.0
+    return min(score, 15.0), is_accelerating
+
 def calc_sector_momentum(pool_df, industry_col='Industry'):
     """v5.0: Rank sectors by momentum, return hot sector list."""
     try:
