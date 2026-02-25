@@ -4,7 +4,7 @@ on:
   schedule:
     # 02:00 UTC = 10:00 Beijing Time (Morning exploration / T+0 signal preview)
     # 06:40 UTC = 14:40 Beijing Time (Tail-end finalization for V10.0 entry)
-    - cron: '0 2,6 * * 1-5'
+    - cron: '0 2 * * 1-5'
     - cron: '40 6 * * 1-5'
   workflow_dispatch: # Allow manual trigger
 

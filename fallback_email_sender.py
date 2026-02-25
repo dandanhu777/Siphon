@@ -566,7 +566,6 @@ def generate_report():
                     <tr>
                         <th style="{th_style} width:15%;">标的/行业</th>
                         <th style="{th_style} width:8%; text-align:center;">推荐当日分值</th>
-                        <th style="{th_style} width:25%;">AI 核心逻辑</th>
                         <th style="{th_style} width:8%; text-align:center;">持有时间</th>
                         <th style="{th_style} width:10%; text-align:right;">推荐日价格/现价</th>
                         <th style="{th_style} width:9%; text-align:center;">现有收益</th>
@@ -596,9 +595,6 @@ def generate_report():
             track_html += f'<tr>'
             track_html += f'<td style="{td_style}"><a href="{link}" style="text-decoration:none; color:#334155; font-weight:600; font-size:13px;">{item["name"]}</a> {badge}<br><span style="color:#94a3b8; font-size:10px;">{item["code"]}</span><br><span style="color:#64748b; font-size:9px;">{item.get("industry","-")}</span></td>'
             track_html += f'<td style="{td_style} text-align:center;"><div style="color:#d97706; font-weight:700; font-size:12px;">{item.get("score", "-")}</div></td>'
-            core_logic = item.get("core_logic")
-            if not core_logic: core_logic = enrich.get("business", item.get("strategy"))
-            track_html += f'<td style="{td_style} font-size:11px; color:#475569; line-height:1.4;">{core_logic}</td>'
             track_html += f'<td style="{td_style} text-align:center; font-weight:bold; color:#64748b; font-size:11px;">{item["t_str"]}</td>'
             track_html += f'<td style="{td_style} text-align:right; font-size:10px;"><div style="color:#94a3b8;">{item["rec_price"]:.2f}</div><div style="font-weight:bold; color:#334155; font-size:12px;">{item["price"]:.2f}</div></td>'
             track_html += f'<td style="{td_style} text-align:center; font-weight:bold; font-size:12px; color:{ret_color};">{ret:+.2f}%</td>'
@@ -613,7 +609,7 @@ def generate_report():
     full_html = f"""
     <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 720px; margin: 0 auto; color: #1e293b; background: #ffffff;">
     <div style="text-align:center; padding: 25px 0;">
-            <div style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">短线虹吸精选 (v10.0.0)</div>
+            <div style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">短线虹吸精选 (v10.1.0)</div>
             <div style="font-size:13px; color:#64748b; margin-top:6px;">{current_time}</div>
         </div>
         
@@ -723,7 +719,7 @@ def generate_report():
     msg['From'] = Header("AI 参谋部", 'utf-8')
     msg['To'] = Header("Commander", 'utf-8')
     today_date = datetime.date.today().strftime("%m/%d")
-    msg['Subject'] = Header(f"✨ 短线虹吸精选 v10.0.0: 深度研报 ({today_date})", 'utf-8')
+    msg['Subject'] = Header(f"✨ 短线虹吸精选 v10.1.0: 深度研报 ({today_date})", 'utf-8')
     # v7.0.1: Add retry logic for SSL errors
     for attempt in range(3):
         try:
