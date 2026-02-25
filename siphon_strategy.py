@@ -78,6 +78,19 @@ def retry(times=3, initial_delay=2):
     return decorator
 
 
+def get_industry_data_robustly():
+    """Robustly fetch industry and growth data with retries."""
+    for date_str in ["20250930", "20241231", "20250630"]:
+        for attempt in range(3):
+            try:
+                df = ak.stock_yjbb_em(date=date_str)
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                print(f"   ⚠️ stock_yjbb_em({date_str}) attempt {attempt+1} failed: {e}")
+                time.sleep(2)
+    return pd.DataFrame()
+
 # --- Data Fetching ---
 
 
@@ -120,9 +133,7 @@ def fetch_basic_pool():
         print("🔄 Trying Sina Daily Bars fallback (always available)...")
         try:
             # Get industry/growth data first to know which stocks to fetch
-            growth_df = ak.stock_yjbb_em(date="20250930")
-            if growth_df.empty:
-                growth_df = ak.stock_yjbb_em(date="20241231")
+            growth_df = get_industry_data_robustly()
             
             if '所处行业' not in growth_df.columns:
                 print("❌ No industry data available")
@@ -209,9 +220,7 @@ def fetch_basic_pool():
         }
         
         print("Fetching Industry & Growth Data...")
-        growth_df = ak.stock_yjbb_em(date="20250930") 
-        if growth_df.empty: 
-             growth_df = ak.stock_yjbb_em(date="20241231")
+        growth_df = get_industry_data_robustly()
              
         if '所处行业' in growth_df.columns:
             growth_df = growth_df[['股票代码', '所处行业', '净利润-同比增长']]
