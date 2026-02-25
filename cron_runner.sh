@@ -1,7 +1,9 @@
 #!/bin/bash
 # ===========================================
 # Daily Siphon Auto-Runner
-# Runs at 14:40 CST on weekdays only (optimal V10 T+2 entry time)
+# Runs at:
+# 1. 10:00 CST (Morning exploration & preview of T+0 signals)
+# 2. 14:40 CST (Final optimal V10 T+2 entry time & database anchor)
 # Skips weekends (Sat/Sun) — no trading
 # ===========================================
 
