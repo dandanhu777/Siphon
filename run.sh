@@ -38,8 +38,8 @@ if [ $? -ne 0 ]; then
 fi
 echo ""
 
-# 1. Run Siphon Strategy v5.0 (Composite Scoring)
-echo "📊 Step 1: Running Strategy v5.0 (Composite Scoring)..."
+# 1. Run Siphon Strategy v10.0 (Ultra-Short-Term Extreme Burst)
+echo "📊 Step 1: Running Strategy v10.0 (Ultra-Short-Term Extreme Burst)..."
 python siphon_strategy.py
 
 if [ $? -eq 0 ]; then
