@@ -681,31 +681,27 @@ def generate_report():
 
         <!-- Scoring Logic Appendix (Chinese) -->
         <div style="margin: 25px 0; border-top: 1px solid #f1f5f9; padding-top: 15px;">
-            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase;">技术附录: 综合评分模型 v5.1 (满分 100)</div>
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase;">逻辑技术附录: V10.0 打板极爆版 (满分 100) | 10:00探索 & 14:40定版</div>
             <div style="font-size: 10px; color: #64748b; line-height: 1.5; font-family: Consolas, Monaco, monospace; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span><strong>1. 逆势抗跌 (30分)</strong></span>
-                    <span>指数大跌时的韧性表现 (权重: 3.0)</span>
+                    <span><strong>1. 资金爆破模块 (40分)</strong></span>
+                    <span>强索量价共振: 当日极速爆量且收盘价逼近全天最高点 (光头阳线)</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span><strong>2. 相对强度 (25分)</strong></span>
-                    <span>加权超额收益 Alpha (5日:50%, 10日:30%, 20日:20%)</span>
+                    <span><strong>2. 极速微观动量 (25分)</strong></span>
+                    <span>3日Alpha与5日Alpha连击。短线越强越买，彻底抛弃20日慢线数据</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span><strong>3. 机构资金 (20分)</strong></span>
-                    <span>吸筹信号 (口袋支点 / 缩量洗盘 / 巨量突破)</span>
+                    <span><strong>3. 逆势抗跌核心 (20分)</strong></span>
+                    <span>指数大跌或跳水时的逆势金身表现 (避险盾牌)</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span><strong>4. 安全边际 (15分)</strong></span>
-                    <span>ATR 波动率评级 (A级&lt;2%=15分, B级&lt;4%=10分)</span>
+                    <span><strong>4. 老鸭头形态 VCP (15分)</strong></span>
+                    <span>捕捉极限的缩量起爆点：昨日极致萎缩，今日放量拉涨</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span><strong>5. 板块动量 (5分)</strong></span>
-                    <span>所属行业涨幅排名前 40% (+5分)</span>
-                </div>
-                <div style="display:flex; justify-content:space-between;">
-                    <span><strong>6. VCP 形态 (5分)</strong></span>
-                    <span>波动收敛 (Volatility Contraction) 且量能枯竭 (+5分)</span>
+                    <span style="color: #0369a1;"><strong>⏰ 日内双线运行机制:</strong></span>
+                    <span style="color: #0369a1; text-align: right;"><strong>10:00</strong> 早盘警示打底仓；<br><strong>14:40</strong> 尾盘定版防跳水 (过滤假突破)。</span>
                 </div>
             </div>
         </div>
