@@ -2,9 +2,9 @@ name: Daily Siphon Report
 
 on:
   schedule:
-    # 08:30 UTC = 16:30 Beijing Time (Winter) / 16:30 (Summer) 
-    # Market closes at 15:00. 16:30 allows time for data settlement.
-    - cron: '30 8 * * 1-5'
+    # 06:00 UTC = 14:00 Beijing Time
+    # Script now triggers at 14:00 CST (during market hours)
+    - cron: '0 6 * * 1-5'
   workflow_dispatch: # Allow manual trigger
 
 jobs:
