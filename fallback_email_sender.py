@@ -613,35 +613,34 @@ def generate_report():
     full_html = f"""
     <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 720px; margin: 0 auto; color: #1e293b; background: #ffffff;">
     <div style="text-align:center; padding: 25px 0;">
-            <div style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">短线虹吸精选 (v8.0.0)</div>
+            <div style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">短线虹吸精选 (v10.0.0)</div>
             <div style="font-size:13px; color:#64748b; margin-top:6px;">{current_time}</div>
         </div>
         
         <div style="background: linear-gradient(to bottom right, #f8fafc, #ffffff); border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0; box-shadow: 0 4px 6px -2px rgba(0,0,0,0.03);">
             <div style="font-weight: 700; color: #334155; font-size: 15px; display: flex; align-items: center; margin-bottom: 20px;">
-                <span style="background:#dbeafe; width:8px; height:8px; border-radius:50%; margin-right:8px;"></span> 策略核心进入机制 (Entry Mechanism)
+                <span style="background:#dbeafe; width:8px; height:8px; border-radius:50%; margin-right:8px;"></span> 策略核心进入机制 (V10.0 极爆打板版)
             </div>
             
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; font-size: 12px; color: #475569; line-height: 1.6;">
                 <div>
-                    <div style="color:#0ea5e9; font-weight:700; margin-bottom:6px;">1. 虹吸分 (Siphon Score)</div>
-                    <div>衡量大资金“逆势吸筹”意愿。分数基于<span style="background:#e0f2fe; color:#0284c7; padding:0 3px;">抗跌幅度</span>与<span style="background:#e0f2fe; color:#0284c7; padding:0 3px;">主动买盘</span>比率。得分 >3.0 表示主力介入。</div>
+                    <div style="color:#0ea5e9; font-weight:700; margin-bottom:6px;">1. 资金突袭 (Burst)</div>
+                    <div>量能爆发。量比必须大于2.5且收盘逼近全天最高点，或呈现<span style="background:#e0f2fe; color:#0284c7; padding:0 3px;">巨量口袋支点</span>。</div>
                 </div>
                 <div>
-                     <div style="color:#f59e0b; font-weight:700; margin-bottom:6px;">2. VCP 形态 (Contraction)</div>
-                     <div>价格波动收敛 + 量能极致枯竭。意味着洗盘结束。</div>
+                     <div style="color:#f59e0b; font-weight:700; margin-bottom:6px;">2. 微观动量 (Micro-Mom)</div>
+                     <div>剥离所有长线慢牛。只看最近 3 天到 5 天的绝对超额Alpha，短线<span style="background:#fef3c7; color:#b45309; padding:0 3px;">越强越买</span>。</div>
                 </div>
                 <div>
-                     <div style="color:#10b981; font-weight:700; margin-bottom:6px;">3. 选股逻辑 (Selection)</div>
-                     <div>我们只选择 <span style="background:#f0fdf4; padding:2px 4px; border-radius:3px;">MA50之上趋势向上</span> 且流动性>1亿的标的。</div>
+                     <div style="color:#10b981; font-weight:700; margin-bottom:6px;">3. 逆势金身 (Antigravity)</div>
+                     <div>在大盘分时跳水时绝对横盘，具有极强的<span style="background:#f0fdf4; color:#047857; padding:0 3px;">避险属性</span>和主力绝对控盘。</div>
                 </div>
                 <div>
-                     <div style="color:#8b5cf6; font-weight:700; margin-bottom:6px;">4. VCP RelStr (相对强度)</div>
-                     <div><span style="background:#f3e8ff; padding:2px 4px; border-radius:3px;">Relative Strength</span> 优先选择 RS 评分 > 80 的标的，即走势强于全市场80%的个股。</div>
+                     <div style="color:#8b5cf6; font-weight:700; margin-bottom:6px;">4. 缩量老鸭头 (VCP)</div>
+                     <div><span style="background:#f3e8ff; padding:2px 4px; border-radius:3px;">极致地量</span>加上爆量反转。意味着洗盘结束，即将无阻力拉升。</div>
                 </div>
             </div>
         </div>
-        
         <div style="margin-bottom: 10px;">
             <div style="font-weight:700; color:#334155; font-size:15px; margin-bottom:12px;">🚀 今日核心优选 (Top Picks)</div>
             {rec_html}
@@ -652,28 +651,28 @@ def generate_report():
         
         <div style="background: linear-gradient(to bottom right, #fff1f2, #ffffff); border: 1px solid #ffe4e6; border-radius: 12px; padding: 20px; margin: 25px 0; box-shadow: 0 4px 6px -2px rgba(0,0,0,0.03);">
             <div style="font-weight: 700; color: #be123c; font-size: 15px; display: flex; align-items: center; margin-bottom: 20px;">
-                <span style="background:#fda4af; width:8px; height:8px; border-radius:50%; margin-right:8px;"></span> 策略核心退出机制 (Exit Mechanism)
+                <span style="background:#fda4af; width:8px; height:8px; border-radius:50%; margin-right:8px;"></span> 策略核心退出机制 (T+2 Ultra-Short Exit)
             </div>
             
             <div style="font-size: 12px; color: #334155; line-height: 1.6;">
                 <div style="margin-bottom: 15px;">
-                    <div style="color:#e11d48; font-weight:700; margin-bottom:4px;">1. 初始化: 防御基准 (Hard Exit)</div>
-                    <div><span style="background:#ffe4e6; color:#9f1239; padding:0 4px; border-radius:3px;">生存锁</span>: 触及 <strong>-7%</strong> 立即清算。无条件执行，防止非线性亏损螺旋。</div>
+                    <div style="color:#e11d48; font-weight:700; margin-bottom:4px;">1. 隔日不及预期 (T+1 弱转弱)</div>
+                    <div><span style="background:#ffe4e6; color:#9f1239; padding:0 4px; border-radius:3px;">果断斩仓</span>: 如果第二天没有高开，或者半小时内不冲高，说明主力诱多或接力失败。立刻微亏/平反走人，绝不格局转长线。</div>
                 </div>
                 
                 <div style="margin-bottom: 15px;">
-                    <div style="color:#d97706; font-weight:700; margin-bottom:4px;">2. 滞涨过滤: 资本效率 (Soft Exit)</div>
-                    <div><span style="background:#fffbeb; color:#b45309; padding:0 4px; border-radius:3px;">机会成本</span>: 持仓 <strong>>5天浮亏</strong> 或 <strong>>10天僵滞</strong>，视为动量失效，立即回收资金。</div>
+                    <div style="color:#d97706; font-weight:700; margin-bottom:4px;">2. 冲高断板 (T+1/T+2 冲高回落)</div>
+                    <div><span style="background:#fffbeb; color:#b45309; padding:0 4px; border-radius:3px;">止盈落袋</span>: 如果次日或第三日大幅冲高但无法封死涨停，或者高位伴随放量滞涨，直接砸盘兑现。</div>
                 </div>
 
                 <div style="margin-bottom: 15px;">
-                    <div style="color:#059669; font-weight:700; margin-bottom:4px;">3. 动量捕获: 合成凸性 (Smart Exit)</div>
-                    <div><span style="background:#ecfdf5; color:#047857; padding:0 4px; border-radius:3px;">Trailing Stop</span>: 利润 >15% 后激活追踪止损 (回撤5%)，只做右侧离场，让利润奔跑。</div>
+                    <div style="color:#059669; font-weight:700; margin-bottom:4px;">3. 连板躺赢 (T+3 龙虎榜溢价)</div>
+                    <div><span style="background:#ecfdf5; color:#047857; padding:0 4px; border-radius:3px;">锁仓放润</span>: 只要能够连板，并且不爆出超过换手率 40% 的天量阴线，就利用 5 日线作为防守底线，锁仓到尾盘。</div>
                 </div>
 
                 <div>
-                    <div style="color:#7c3aed; font-weight:700; margin-bottom:4px;">4. 环境感知: 主动防御 (De-risk)</div>
-                    <div><span style="background:#f3e8ff; color:#6d28d9; padding:0 4px; border-radius:3px;">Technical Warning</span>: 出现 MACD 死叉或破位时，主动降低仓位敞口。</div>
+                    <div style="color:#7c3aed; font-weight:700; margin-bottom:4px;">4. 破位止损定海神针 (Hard Stop)</div>
+                    <div><span style="background:#f3e8ff; color:#6d28d9; padding:0 4px; border-radius:3px;">生存锁</span>: 任何情况下一旦亏损超过 -5%，无条件割肉离场。</div>
                 </div>
             </div>
         </div>
@@ -724,7 +723,7 @@ def generate_report():
     msg['From'] = Header("AI 参谋部", 'utf-8')
     msg['To'] = Header("Commander", 'utf-8')
     today_date = datetime.date.today().strftime("%m/%d")
-    msg['Subject'] = Header(f"✨ 短线虹吸精选 v8.0.0: 深度研报 ({today_date})", 'utf-8')
+    msg['Subject'] = Header(f"✨ 短线虹吸精选 v10.0.0: 深度研报 ({today_date})", 'utf-8')
     # v7.0.1: Add retry logic for SSL errors
     for attempt in range(3):
         try:
