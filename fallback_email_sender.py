@@ -561,17 +561,18 @@ def generate_report():
                 <div style="font-weight:700; color:#334155; font-size:15px;">📊 历史回顾 (Tracking)</div>
                 <div style="font-size:11px; color:#94a3b8; background:#f1f5f9; padding:2px 6px; border-radius:4px;">Ref: SSEC</div>
             </div>
-            <table style="{table_style}">
-                <thead>
-                    <tr>
-                        <th style="{th_style} width:15%;">标的/行业</th>
-                        <th style="{th_style} width:8%; text-align:center;">推荐当日分值</th>
-                        <th style="{th_style} width:8%; text-align:center;">持有时间</th>
-                        <th style="{th_style} width:10%; text-align:right;">推荐日价格/现价</th>
-                        <th style="{th_style} width:9%; text-align:center;">现有收益</th>
-                        <th style="{th_style} width:10%; text-align:center;">操作建议</th>
-                        <th style="{th_style} width:9%; text-align:center;">最高收益</th>
-                        <th style="{th_style} width:8%; text-align:center;">同期大盘</th>
+            <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
+                <table style="{table_style} min-width: 600px; white-space: nowrap;">
+                    <thead>
+                        <tr>
+                            <th style="{th_style} width:15%;">标的/行业</th>
+                            <th style="{th_style} width:8%; text-align:center;">打板分</th>
+                            <th style="{th_style} width:8%; text-align:center;">天数</th>
+                            <th style="{th_style} width:10%; text-align:right;">买入/现价</th>
+                            <th style="{th_style} width:9%; text-align:center;">收益</th>
+                            <th style="{th_style} width:10%; text-align:center;">操作</th>
+                            <th style="{th_style} width:9%; text-align:center;">极值</th>
+                            <th style="{th_style} width:8%; text-align:center;">大盘</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -593,17 +594,17 @@ def generate_report():
             badge = f'<span style="font-size:9px; background:#e0f2fe; color:#0284c7; padding:1px 4px; border-radius:3px; margin-left:3px;">R{item["nth"]}</span>' if item['nth'] > 1 else ""
 
             track_html += f'<tr>'
-            track_html += f'<td style="{td_style}"><a href="{link}" style="text-decoration:none; color:#334155; font-weight:600; font-size:13px;">{item["name"]}</a> {badge}<br><span style="color:#94a3b8; font-size:10px;">{item["code"]}</span><br><span style="color:#64748b; font-size:9px;">{item.get("industry","-")}</span></td>'
-            track_html += f'<td style="{td_style} text-align:center;"><div style="color:#d97706; font-weight:700; font-size:12px;">{item.get("score", "-")}</div></td>'
-            track_html += f'<td style="{td_style} text-align:center; font-weight:bold; color:#64748b; font-size:11px;">{item["t_str"]}</td>'
-            track_html += f'<td style="{td_style} text-align:right; font-size:10px;"><div style="color:#94a3b8;">{item["rec_price"]:.2f}</div><div style="font-weight:bold; color:#334155; font-size:12px;">{item["price"]:.2f}</div></td>'
-            track_html += f'<td style="{td_style} text-align:center; font-weight:bold; font-size:12px; color:{ret_color};">{ret:+.2f}%</td>'
-            track_html += f'<td style="{td_style} text-align:center;"><span style="background:{action_bg}; color:{action_fg}; padding:4px 8px; border-radius:4px; font-weight:800; font-size:11px; display:inline-block; min-width:50px;">{action_text}</span></td>' 
-            track_html += f'<td style="{td_style} text-align:center; font-size:11px;">{item["max_return"]}</td>'
+            track_html += f'<td style="{td_style} white-space: nowrap;"><a href="{link}" style="text-decoration:none; color:#334155; font-weight:600; font-size:14px;">{item["name"]}</a> {badge}<br><span style="color:#94a3b8; font-size:11px;">{item["code"]}</span><br><span style="color:#64748b; font-size:10px;">{item.get("industry","-")}</span></td>'
+            track_html += f'<td style="{td_style} text-align:center; white-space: nowrap;"><div style="color:#d97706; font-weight:700; font-size:13px;">{item.get("score", "-")}</div></td>'
+            track_html += f'<td style="{td_style} text-align:center; font-weight:bold; color:#64748b; font-size:12px; white-space: nowrap;">{item["t_str"]}</td>'
+            track_html += f'<td style="{td_style} text-align:right; white-space: nowrap; font-size:11px;"><div style="color:#94a3b8;">{item["rec_price"]:.2f}</div><div style="font-weight:bold; color:#334155; font-size:14px;">{item["price"]:.2f}</div></td>'
+            track_html += f'<td style="{td_style} text-align:center; font-weight:bold; font-size:14px; color:{ret_color}; white-space: nowrap;">{ret:+.2f}%</td>'
+            track_html += f'<td style="{td_style} text-align:center; white-space: nowrap;"><span style="background:{action_bg}; color:{action_fg}; padding:4px 8px; border-radius:4px; font-weight:800; font-size:12px; display:inline-block; min-width:50px;">{action_text}</span></td>' 
+            track_html += f'<td style="{td_style} text-align:center; font-size:12px; white-space: nowrap;">{item["max_return"]}</td>'
 
-            track_html += f'<td style="{td_style} text-align:center; font-size:11px; color:{idx_color}; background:#f8fafc;">{idx_str}</td>'
+            track_html += f'<td style="{td_style} text-align:center; font-size:12px; color:{idx_color}; background:#f8fafc; white-space: nowrap;">{idx_str}</td>'
             track_html += '</tr>'
-        track_html += '</tbody></table></div>'
+        track_html += '</tbody></table></div></div>'
     else: track_html = ""
 
     full_html = f"""
