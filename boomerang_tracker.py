@@ -396,22 +396,56 @@ if not os.path.exists(DB_PATH):
 
 def sync_from_csv(csv_path="siphon_strategy_results.csv", rec_date=None):
     """
-    v7.1: Sync daily recommendations from CSV to database.
-    Ensures each day's picks are persisted for T+1 to T+15 tracking.
+    v8.1: Sync daily recommendations from CSV to database.
+    Reads 'Date' from CSV if available, falling back to CLI arg or today.
+    Overwrites previous runs on the same day by pruning outdated records.
     """
     if not os.path.exists(csv_path):
         print(f"❌ CSV not found: {csv_path}")
         return 0
     
-    if rec_date is None:
-        rec_date = datetime.date.today().strftime("%Y-%m-%d")
+    default_date = rec_date if rec_date else datetime.date.today().strftime("%Y-%m-%d")
     
     df = pd.read_csv(csv_path)
     print(f"📥 Reading {len(df)} records from {csv_path}")
     
     inserted = 0
     updated = 0
+    deleted = 0
     
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Track which dates and stocks are in the current run
+    current_runs = {}
+    
+    for _, row in df.iterrows():
+        stock_code = str(row.get('Symbol', '')).zfill(6)
+        row_date = row.get('Date', default_date)
+        if pd.isna(row_date):
+            row_date = default_date
+            
+        if not stock_code or pd.isna(row.get('Price')) or float(row.get('Price', 0)) <= 0:
+            continue
+            
+        if row_date not in current_runs:
+            current_runs[row_date] = set()
+        current_runs[row_date].add(stock_code)
+        
+    # If the CSV is empty, we should still prune for the default date
+    if not current_runs:
+        current_runs[default_date] = set()
+        
+    # Phase 1: Prune records from the same day that are no longer in the CSV
+    for r_date, valid_codes in current_runs.items():
+        cursor.execute("SELECT id, stock_code FROM recommendations WHERE rec_date = ?", (r_date,))
+        for rec_id, db_code in cursor.fetchall():
+            if db_code not in valid_codes:
+                cursor.execute("DELETE FROM daily_performance WHERE rec_id = ?", (rec_id,))
+                cursor.execute("DELETE FROM recommendations WHERE id = ?", (rec_id,))
+                deleted += 1
+                
+    # Phase 2: Insert or Update valid records
     for _, row in df.iterrows():
         stock_code = str(row.get('Symbol', '')).zfill(6)
         stock_name = row.get('Name', 'Unknown')
@@ -421,20 +455,20 @@ def sync_from_csv(csv_path="siphon_strategy_results.csv", rec_date=None):
         strategy_tag = row.get('Strategy', 'Siphon')
         core_logic = row.get('Logic', 'Daily Candidate')
         
+        row_date = row.get('Date', default_date)
+        if pd.isna(row_date):
+            row_date = default_date
+            
         if not stock_code or rec_price <= 0:
             continue
-        
-        # Check if already exists
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+            
         cursor.execute(
             "SELECT id FROM recommendations WHERE stock_code = ? AND rec_date = ?",
-            (stock_code, rec_date)
+            (stock_code, row_date)
         )
         existing = cursor.fetchone()
         
         if existing:
-            # Update existing record
             cursor.execute("""
                 UPDATE recommendations 
                 SET rec_price = ?, siphon_score = ?, strategy_tag = ?, industry = ?, core_logic = ?
@@ -442,17 +476,16 @@ def sync_from_csv(csv_path="siphon_strategy_results.csv", rec_date=None):
             """, (rec_price, siphon_score, strategy_tag, industry, core_logic, existing[0]))
             updated += 1
         else:
-            # Insert new record
             cursor.execute("""
                 INSERT INTO recommendations (stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic))
+            """, (stock_code, stock_name, rec_price, row_date, strategy_tag, siphon_score, industry, core_logic))
             inserted += 1
-        
-        conn.commit()
-        conn.close()
+            
+    conn.commit()
+    conn.close()
     
-    print(f"✅ Sync complete: {inserted} inserted, {updated} updated for {rec_date}")
+    print(f"✅ Sync complete: {inserted} inserted, {updated} updated, {deleted} pruned for {default_date}")
     return inserted + updated
 
 # --- CLI Entry Point ---

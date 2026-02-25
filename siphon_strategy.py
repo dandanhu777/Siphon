@@ -813,23 +813,19 @@ def _filter_technicals(hist, change_pct, realtime_change_pct, cfg=CONFIG):
 def _save_and_report(results, csv_path, last_trading_date):
     """Save results to CSV, track in Boomerang, call Commander."""
     if not results:
-        print("No stocks matched v3.0 criteria.")
+        print("No stocks matched v6.0 criteria.")
+        # If no stocks, write an empty CSV to clear old signals
+        pd.DataFrame(columns=['Symbol', 'Name', 'Date', 'Industry', 'Price', 'Change_Pct', 'AG_Score', 'AG_Details', 'Volume_Note', 'RS_Score', 'Vol_Explosion', 'Momentum_Accel', 'Sector_Leader', 'Flow_Ratio', 'Composite']).to_csv(csv_path, index=False)
         return
+
+    # Add Date explicitly to all results
+    for r in results:
+        r['Date'] = last_trading_date
 
     final_df = pd.DataFrame(results)
     final_df = final_df.sort_values(by=['AG_Score'], ascending=False)
 
-    # Save CSV (Append/Merge mode)
-    if os.path.exists(csv_path):
-        try:
-            existing_df = pd.read_csv(csv_path)
-            combined_df = pd.concat([existing_df, final_df], ignore_index=True)
-            combined_df = combined_df.drop_duplicates(subset=['Symbol'], keep='last')
-            combined_df = combined_df.sort_values(by=['AG_Score'], ascending=False)
-            final_df = combined_df
-        except Exception as e:
-            print(f"Error merging CSV: {e}")
-
+    # Save CSV (OVERWRITE mode)
     final_df.to_csv(csv_path, index=False)
     print(f"Results saved to {csv_path} (Count: {len(final_df)})")
 

@@ -29,6 +29,15 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 echo "✅ Proxy disabled for data fetching."
 echo ""
 
+# 0.5: Trading Day Check
+echo "📅 Step 0.5: Checking if today is a trading day..."
+python scripts/check_trading_day.py
+if [ $? -ne 0 ]; then
+    echo "⏸️  Not a trading day (Holiday/Weekend). Exiting..."
+    exit 0
+fi
+echo ""
+
 # 1. Run Siphon Strategy v5.0 (Composite Scoring)
 echo "📊 Step 1: Running Strategy v5.0 (Composite Scoring)..."
 python siphon_strategy.py
