@@ -451,14 +451,15 @@ def analyze_volume_anomaly(stock_hist):
         
     return False, "None"
 
-# --- v5.0 Enhanced Analysis ---
+# --- v10.0 Ultra-Short-Term Extreme Burst Analysis ---
 
-def calc_relative_strength(stock_hist, index_hist):
-    """v6.0: Short-term relative strength (3/5/10 day alpha).
-    Weighted: 3d=40%, 5d=35%, 10d=25%. Shorter windows for momentum capture.
+def calc_micro_momentum(stock_hist, index_hist):
+    """v10.0: Micro Momentum (0-25).
+    Replaces older 20-day / 10-day Alpha tracking.
+    15 points for 3-day Alpha. 10 points for 5-day Alpha.
     """
     merged = pd.merge(stock_hist, index_hist, on='date', how='inner', suffixes=('', '_idx'))
-    if len(merged) < 11:
+    if len(merged) < 6:
         return 0.0, False
 
     closes = merged['close']
@@ -466,173 +467,86 @@ def calc_relative_strength(stock_hist, index_hist):
 
     stock_3d = (closes.iloc[-1] / closes.iloc[-4] - 1) * 100 if len(closes) > 3 else 0
     stock_5d = (closes.iloc[-1] / closes.iloc[-6] - 1) * 100 if len(closes) > 5 else 0
-    stock_10d = (closes.iloc[-1] / closes.iloc[-11] - 1) * 100 if len(closes) > 10 else 0
 
     idx_3d = (idx_closes.iloc[-1] / idx_closes.iloc[-4] - 1) * 100 if len(idx_closes) > 3 else 0
     idx_5d = (idx_closes.iloc[-1] / idx_closes.iloc[-6] - 1) * 100 if len(idx_closes) > 5 else 0
-    idx_10d = (idx_closes.iloc[-1] / idx_closes.iloc[-11] - 1) * 100 if len(idx_closes) > 10 else 0
 
     alpha_3d = stock_3d - idx_3d
     alpha_5d = stock_5d - idx_5d
-    alpha_10d = stock_10d - idx_10d
 
-    # Acceleration: short > mid > long and all positive
-    is_accelerating = alpha_3d > alpha_5d > alpha_10d > 0
+    # Scoring: Up to 15 pts if 3-day alpha > 7.5%, Up to 10 pts if 5-day alpha > 6.6%
+    score_3d = min(max(alpha_3d * 2.0, 0), 15.0)
+    score_5d = min(max(alpha_5d * 1.5, 0), 10.0)
 
-    # v6.0: Weighted RS (shorter windows weighted more)
-    rs = alpha_3d * 0.4 + alpha_5d * 0.35 + alpha_10d * 0.25
-    return round(rs, 2), is_accelerating
+    score = score_3d + score_5d
+    is_accelerating = alpha_3d > alpha_5d > 0
+    return round(score, 1), is_accelerating
 
-def detect_institutional_flow(stock_hist, lookback=10):
-    """v5.0: Detect institutional accumulation patterns."""
-    if len(stock_hist) < lookback:
-        return {'flow_ratio': 1.0, 'rising_floor': False, 'vol_divergence': False, 'score': 0}
-    
-    recent = stock_hist.tail(lookback)
-    
-    # Feature 1: Up-volume vs Down-volume ratio
-    up_days = recent[recent['change_pct'] > 0]
-    dn_days = recent[recent['change_pct'] <= 0]
-    avg_up_vol = up_days['volume'].mean() if not up_days.empty else 0
-    avg_dn_vol = dn_days['volume'].mean() if not dn_days.empty else 1
-    flow_ratio = avg_up_vol / max(avg_dn_vol, 1)
-    
-    # Feature 2: Rising floor (lows trending up)
-    lows_3d = recent['close'].rolling(3).min()
-    rising_floor = False
-    if len(lows_3d.dropna()) >= 7:
-        rising_floor = (lows_3d.iloc[-1] > lows_3d.iloc[-4]) and (lows_3d.iloc[-4] > lows_3d.iloc[-7])
-    
-    # Feature 3: Volume-price divergence (price flat, volume declining = selling exhaustion)
-    price_flat = abs(recent['close'].iloc[-1] / recent['close'].iloc[0] - 1) < 0.03
-    vol_early = recent['volume'].iloc[:3].mean()
-    vol_late = recent['volume'].iloc[-3:].mean()
-    vol_divergence = price_flat and (vol_late < vol_early * 0.7) if vol_early > 0 else False
-    
-    # Composite flow score (0-5)
-    fscore = 0
-    if flow_ratio > 1.5: fscore += 2
-    elif flow_ratio > 1.2: fscore += 1
-    if rising_floor: fscore += 2
-    if vol_divergence: fscore += 1
-    
-    return {
-        'flow_ratio': round(flow_ratio, 2),
-        'rising_floor': rising_floor,
-        'vol_divergence': vol_divergence,
-        'score': fscore
-    }
-
-def calc_safety_margin(stock_hist):
-    """v5.1: ATR-based dynamic safety margin grading using High/Low (True Range)."""
-    if len(stock_hist) < 15:
-        return 'C', 99.0  # Not enough data = conservative
-    
-    # Check if High/Low exist (legacy cache might not have them)
-    if 'high' not in stock_hist.columns or 'low' not in stock_hist.columns:
-        # Fallback to Close-based simplified ATR
-        daily_range = stock_hist['close'].diff().abs()
-    else:
-        # True Range Calculation
-        high = stock_hist['high']
-        low = stock_hist['low']
-        close_prev = stock_hist['close'].shift(1)
-        
-        tr1 = high - low
-        tr2 = (high - close_prev).abs()
-        tr3 = (low - close_prev).abs()
-        
-        daily_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
-    atr14 = daily_range.rolling(14).mean().iloc[-1]
-    
-    current_price = stock_hist['close'].iloc[-1]
-    if current_price <= 0:
-        return 'D', 99.0
-    
-    atr_pct = (atr14 / current_price) * 100
-    
-    if atr_pct < 2.0:   return 'A', round(atr_pct, 2)  # Low volatility = high safety
-    elif atr_pct < 4.0: return 'B', round(atr_pct, 2)  # Medium
-    elif atr_pct < 6.0: return 'C', round(atr_pct, 2)  # High
-    else:               return 'D', round(atr_pct, 2)  # Dangerous
-
-def calc_volume_explosion(stock_hist):
-    """v6.0: Volume explosion scoring (0-20).
-    Measures today's volume vs 5-day average.
-    Core signal for short-term momentum ignition.
+def calc_institutional_burst(stock_hist, is_hot_sector):
+    """v10.0: Institutional Burst (0-40).
+    Captures extreme volume anomalies + price action + pocket pivots.
     """
-    if len(stock_hist) < 6:
-        return 0.0, 1.0
+    if len(stock_hist) < 11:
+        return 0.0, 1.0, False
 
-    today_vol = stock_hist['volume'].iloc[-1]
+    today = stock_hist.iloc[-1]
     ma5_vol = stock_hist['volume'].iloc[-6:-1].mean()
-
-    if ma5_vol <= 0:
-        return 0.0, 1.0
-
-    vol_ratio = today_vol / ma5_vol
-
-    # Scoring: higher ratio = higher score
-    if vol_ratio >= 4.0:
-        score = 20.0   # Extreme explosion
-    elif vol_ratio >= 3.0:
-        score = 16.0
-    elif vol_ratio >= 2.0:
-        score = 12.0
-    elif vol_ratio >= 1.5:
-        score = 8.0
-    elif vol_ratio >= 1.2:
-        score = 4.0
-    else:
-        score = 0.0
-
-    # Bonus: volume explosion on a green candle is stronger
-    if stock_hist['change_pct'].iloc[-1] > 0 and vol_ratio >= 2.0:
-        score = min(score + 2.0, 20.0)
-
-    return score, round(vol_ratio, 2)
-
-def calc_momentum_acceleration(stock_hist, index_hist):
-    """v6.0: Momentum acceleration scoring (0-15).
-    Detects daily alpha increasing pattern:
-    today's alpha > yesterday's > day before.
-    Accelerating stocks have highest short-term burst probability.
-    """
-    merged = pd.merge(stock_hist, index_hist, on='date', how='inner', suffixes=('', '_idx'))
-    if len(merged) < 6:
-        return 0.0, False
-
-    # Calculate daily alpha (stock return - index return)
-    merged['daily_alpha'] = merged['change_pct'] - merged['Index_Change']
-    recent = merged.tail(5)
-    alphas = recent['daily_alpha'].values
-
+    today_vol = today['volume']
+    
+    vol_ratio = today_vol / ma5_vol if ma5_vol > 0 else 1.0
+    
     score = 0.0
+    
+    # 1. Price Momentum: Close near high (0-15)
+    high_low_range = today['high'] - today['low']
+    if high_low_range > 0:
+        close_position = (today['close'] - today['low']) / high_low_range
+    else:
+        close_position = 1.0
+        
+    if close_position > 0.85 and vol_ratio >= 2.0:
+        score += 15.0  # Exploding volume closing near high
+    elif close_position > 0.70 and vol_ratio >= 1.5:
+        score += 8.0
+        
+    # 2. Pocket Pivot (0-15)
+    # Today's volume > max down volume of last 10 days
+    recent_10 = stock_hist.iloc[-11:-1]
+    down_vols = recent_10[recent_10['change_pct'] < 0]['volume']
+    max_down_vol = down_vols.max() if not down_vols.empty else 0
+    
+    if today_vol > max_down_vol and today['change_pct'] > 0:
+        score += 15.0
+    elif today_vol > ma5_vol * 1.5 and today['change_pct'] > 0:
+        score += 5.0
+        
+    # 3. Sector Synergy & Active Turnover (0-10)
+    if is_hot_sector:
+        score += 10.0
 
-    # Pattern 1: Consecutive alpha increase (last 3 days)
-    if len(alphas) >= 3:
-        a1, a2, a3 = alphas[-3], alphas[-2], alphas[-1]
-        if a3 > a2 > a1:
-            score += 8.0  # Strong acceleration
-        elif a3 > a2 and a3 > 0:
-            score += 5.0  # Moderate acceleration
-        elif a3 > 0:
-            score += 2.0  # At least positive alpha today
+    return min(score, 40.0), round(vol_ratio, 2), close_position > 0.85
 
-    # Pattern 2: 3-day cumulative alpha positive and growing
-    if len(alphas) >= 5:
-        alpha_3d = alphas[-3:].sum()
-        alpha_5d = alphas.sum()
-        if alpha_3d > 0 and alpha_3d > alpha_5d * 0.7:
-            score += 4.0  # Recent alpha concentrated in last 3 days
-
-    # Pattern 3: Today's alpha is the strongest in 5 days
-    if alphas[-1] == max(alphas) and alphas[-1] > 1.0:
-        score += 3.0
-
-    is_accelerating = score >= 8.0
-    return min(score, 15.0), is_accelerating
+def calc_vcp_breakout(stock_hist):
+    """v10.0: VCP & Squeeze Breakout (0-15).
+    Yesterday volume extremely low, today exploding upwards.
+    """
+    if len(stock_hist) < 6: return 0.0, False
+    
+    ma5_vol_prev = stock_hist['volume'].iloc[-7:-2].mean()
+    yesterday_vol = stock_hist.iloc[-2]['volume']
+    today_vol = stock_hist.iloc[-1]['volume']
+    
+    score = 0.0
+    is_vcp = False
+    
+    if yesterday_vol < ma5_vol_prev * 0.6:  # Extreme volume contraction yesterday
+        if today_vol > yesterday_vol * 2.0 and stock_hist.iloc[-1]['change_pct'] > 2.0:
+            score += 15.0  # Perfect slingshot
+            is_vcp = True
+        elif today_vol > yesterday_vol * 1.5 and stock_hist.iloc[-1]['change_pct'] > 0:
+            score += 8.0
+            
+    return score, is_vcp
 
 def calc_sector_momentum(pool_df, industry_col='Industry'):
     """v6.0: Sector momentum with per-stock ranking within sector.
@@ -683,42 +597,21 @@ def calc_sector_leader_score(symbol, is_hot_sector, sector_rankings):
     else:
         return 2.0   # In hot sector but not leading
 
-def calc_composite_score(ag_score, rs_score, flow_info, is_hot_sector,
-                         vcp_signal, vol_explosion_score, momentum_accel_score,
-                         sector_leader_score):
-    """v6.0: Aggressive momentum composite scoring (0-100).
+def calc_composite_score(ag_score, micro_mom_score, inst_score, vcp_score):
+    """v10.0: Ultra-Short-Term Extreme Burst (0-100).
 
     Weight allocation:
-    1. Relative Strength Alpha   — 30pts (core)
-    2. Volume Explosion          — 20pts (ignition signal)
-    3. Institutional Flow        — 20pts (smart money)
-    4. Momentum Acceleration     — 15pts (burst probability)
-    5. Sector Leader             — 10pts (leading hot sector)
-    6. Antigravity (resilience)  —  5pts (minor reference)
+    1. Institutional Burst (Volume/Price/Sector) — 40pts
+    2. Micro-Momentum (3D/5D Alpha)              — 25pts
+    3. Antigravity (Resilience)                  — 20pts
+    4. VCP / Squeeze Breakout                    — 15pts
     """
     score = 0.0
 
-    # 1. Relative Strength (0-30): multi-timeframe outperformance
-    score += max(min(rs_score * 3.0, 30.0), 0.0)
-
-    # 2. Volume Explosion (0-20): today's volume vs 5d avg
-    score += min(vol_explosion_score, 20.0)
-
-    # 3. Institutional Flow (0-20): accumulation patterns
-    score += flow_info['score'] * 4.0  # max 5 * 4 = 20
-
-    # 4. Momentum Acceleration (0-15): daily alpha increasing
-    score += min(momentum_accel_score, 15.0)
-
-    # 5. Sector Leader (0-10): rank within hot sector
-    score += min(sector_leader_score, 10.0)
-
-    # 6. Antigravity (0-5): minor resilience reference
-    score += min(ag_score * 0.5, 5.0)
-
-    # Bonus: VCP pattern still gets a small nudge (not scored independently)
-    if vcp_signal:
-        score += 2.0
+    score += inst_score                    # 0-40
+    score += micro_mom_score               # 0-25
+    score += min(ag_score * 2.0, 20.0)     # 0-20 (ag_score natively around 0-10)
+    score += vcp_score                     # 0-15
 
     return round(min(score, 100.0), 1)
 
@@ -764,8 +657,8 @@ def _filter_fundamentals(row, market, cfg=CONFIG):
 
     return True, change_pct
 
-def _filter_technicals(hist, change_pct, realtime_change_pct, cfg=CONFIG):
-    """Apply technical filters. Returns (pass, rsi, stock_3d, vcp_signal)."""
+def _filter_technicals(hist, change_pct, realtime_change_pct, turnover_rate=None, cfg=CONFIG):
+    """Apply v10.0 technical filters. Returns (pass, rsi, stock_3d, vcp_signal)."""
     current_price = hist.iloc[-1]['close']
 
     # Anti-FOMO: 5-day cumulative gain
@@ -796,13 +689,15 @@ def _filter_technicals(hist, change_pct, realtime_change_pct, cfg=CONFIG):
         ma = hist['close'].rolling(cfg.ma_period).mean().iloc[-1]
         if current_price < ma: return False, rsi, stock_3d, False
 
-    # Liquidity gate
-    avg_volume_20 = hist['volume'].tail(20).mean()
-    if pd.notna(avg_volume_20) and avg_volume_20 < cfg.min_avg_volume:
-        return False, rsi, stock_3d, False
-
-    # Wild swing filter
-    if abs(stock_3d) > cfg.max_swing_3d: return False, rsi, stock_3d, False
+    # v10.0 Liquidity & Active Turnover Gate (replaces simple volume checks)
+    if turnover_rate is not None and turnover_rate > 0:
+        if turnover_rate < 5.0 or turnover_rate > 35.0:
+            return False, rsi, stock_3d, False
+    else:
+        # Fallback to absolute volume if turnover is missing
+        avg_volume_20 = hist['volume'].tail(20).mean()
+        if pd.notna(avg_volume_20) and avg_volume_20 < cfg.min_avg_volume:
+            return False, rsi, stock_3d, False
 
     # VCP detection
     ma5_vol = hist['volume'].tail(5).mean()
@@ -858,7 +753,7 @@ def _save_and_report(results, csv_path, last_trading_date):
 # --- Runner ---
 
 def run_siphoner_strategy(market='CN', cfg=CONFIG):
-    print(f"=== Starting 'Siphon Strategy v6.0 — Aggressive Momentum' (Market: {market}) ===")
+    print(f"=== Starting 'Siphon Strategy v10.0 — Ultra-Short-Term Extreme Burst' (Market: {market}) ===")
     
     if market == 'CN':
         pool = fetch_basic_pool()
@@ -924,12 +819,13 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
         realtime_change_pct = change_pct
         # Use real-time spot price from pool when available (more accurate during market hours)
         spot_price = pd.to_numeric(row.get('Price', 0), errors='coerce')
+        turnover_rate = pd.to_numeric(row.get('Turnover_Rate', 0), errors='coerce')
         hist_close = hist.iloc[-1]['close']
         current_price = spot_price if (pd.notna(spot_price) and spot_price > 0) else hist_close
         change_pct = hist.iloc[-1]['change_pct']
         
         # Step 2: Technical filtering
-        tech_ok, rsi, stock_3d, vcp_signal = _filter_technicals(hist, change_pct, realtime_change_pct, cfg)
+        tech_ok, rsi, stock_3d, vcp_signal = _filter_technicals(hist, change_pct, realtime_change_pct, turnover_rate, cfg)
         if not tech_ok: continue
 
         # Limit-up check
@@ -937,49 +833,37 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
             print(f"Skip {name}: Daily Limit Up/Surge (+{realtime_change_pct:.2f}%)")
             continue
 
-        # Step 3: v6.0 Enhanced Scoring
+        # Step 3: v10.0 Enhanced Scoring
         ag_score, ag_details = calculate_antigravity_score(hist, index_df)
         if ag_score < cfg.min_ag_score:
             continue
 
-        # v6.0: Relative Strength
-        rs_score, is_accelerating = calc_relative_strength(hist, index_df)
+        # v10.0: Micro Momentum
+        micro_mom_score, is_accelerating = calc_micro_momentum(hist, index_df)
 
-        # v6.0: Institutional Flow
-        flow_info = detect_institutional_flow(hist)
+        # v10.0: Institutional Burst
+        inst_score, vol_ratio, is_closing_high = calc_institutional_burst(hist, is_hot_sector)
 
-        # v6.0: Volume Explosion
-        vol_explosion_score, vol_ratio = calc_volume_explosion(hist)
+        # v10.0: VCP Breakout
+        vcp_score, is_vcp_breakout = calc_vcp_breakout(hist)
 
-        # v6.0: Momentum Acceleration
-        momentum_accel_score, _ = calc_momentum_acceleration(hist, index_df)
-
-        # v6.0: Sector Leader Score
-        sector_leader_score = calc_sector_leader_score(symbol, is_hot_sector, sector_rankings)
-
-        # v6.0: Composite Score (0-100) with aggressive momentum weights
-        composite = calc_composite_score(
-            ag_score, rs_score, flow_info, is_hot_sector,
-            vcp_signal, vol_explosion_score, momentum_accel_score,
-            sector_leader_score
-        )
+        # v10.0: Composite Score (0-100) specifically for Ultra-Short Burst
+        composite = calc_composite_score(ag_score, micro_mom_score, inst_score, vcp_score)
         
         if composite < cfg.min_composite_score:
             continue
         
         # Build signal tags
         signal_tags = []
-        if vol_explosion_score >= 12: signal_tags.append(f"爆量{vol_ratio:.1f}x")
-        if momentum_accel_score >= 8.0: signal_tags.append("加速🚀")
-        if is_accelerating: signal_tags.append("RS加速")
-        if flow_info['rising_floor']: signal_tags.append("底升")
-        if flow_info['flow_ratio'] > 1.5: signal_tags.append("吸筹")
-        if vcp_signal: signal_tags.append("VCP")
-        if sector_leader_score >= 7: signal_tags.append("领涨")
-        if rsi < 50: signal_tags.append("LowRSI")
+        if inst_score >= 25: signal_tags.append(f"爆量突袭{vol_ratio:.1f}x")
+        if micro_mom_score >= 15: signal_tags.append("强势连击🚀")
+        if is_closing_high: signal_tags.append("光头阳")
+        if is_vcp_breakout: signal_tags.append("老鸭头突破")
+        if ag_score >= 4: signal_tags.append("金身免伤防御盾")
+        if is_hot_sector: signal_tags.append("主线共振")
         signal_str = " ".join(signal_tags) if signal_tags else "Momentum"
 
-        vol_note = f"VolR:{vol_ratio:.1f}x Flow:{flow_info['flow_ratio']:.1f}"
+        vol_note = f"VolR:{vol_ratio:.1f}x Burst:{inst_score:.0f}"
 
         symbol_str = str(symbol).zfill(6)
 
@@ -992,14 +876,14 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
             'AG_Score': composite,
             'AG_Details': signal_str,
             'Volume_Note': vol_note,
-            'RS_Score': rs_score,
-            'Vol_Explosion': vol_explosion_score,
-            'Momentum_Accel': momentum_accel_score,
-            'Sector_Leader': sector_leader_score,
-            'Flow_Ratio': flow_info['flow_ratio'],
+            'RS_Score': micro_mom_score,
+            'Vol_Explosion': vol_ratio,
+            'Momentum_Accel': vcp_score,
+            'Sector_Leader': is_hot_sector,
+            'Flow_Ratio': inst_score,
             'Composite': composite
         })
-        print(f"MATCH {name}: C={composite} RS={rs_score:.1f} Vol={vol_explosion_score:.0f} Accel={momentum_accel_score:.0f} Flow={flow_info['flow_ratio']:.1f} Sector={sector_leader_score:.0f}")
+        print(f"MATCH {name}: C={composite} Mom={micro_mom_score:.1f} Burst={inst_score:.0f} VCP={vcp_score:.0f} Sector={is_hot_sector}")
     
     # Step 4: Save and report
     _save_and_report(results, "siphon_strategy_results.csv", last_trading_date)

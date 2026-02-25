@@ -1,7 +1,7 @@
 #!/bin/bash
 # ===========================================
 # Daily Siphon Auto-Runner
-# Runs at 14:00 CST on weekdays only
+# Runs at 14:40 CST on weekdays only (optimal V10 T+2 entry time)
 # Skips weekends (Sat/Sun) — no trading
 # ===========================================
 
