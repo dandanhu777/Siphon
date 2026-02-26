@@ -17,9 +17,11 @@ warnings.filterwarnings('ignore')
 import requests
 from requests.sessions import Session
 
-original_request = Session.request
+# We patch Session.request because most libraries (including akshare) 
+# eventually use a Session or the functional API which uses a default session.
+original_session_request = Session.request
 
-def spoofed_request(self, method, url, *args, **kwargs):
+def spoofed_session_request(self, method, url, *args, **kwargs):
     headers = kwargs.get('headers', {})
     if not headers:
         headers = {}
@@ -27,21 +29,37 @@ def spoofed_request(self, method, url, *args, **kwargs):
         headers = headers.copy()
         
     if 'User-Agent' not in headers:
+        # Standard realistic browser UA
         headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     
-    # Also add standard browser headers to be more convincing
+    # Standard browser headers to ensure it looks like a real browser
     if 'Accept' not in headers:
         headers['Accept'] = 'application/json, text/plain, */*'
     if 'Accept-Language' not in headers:
         headers['Accept-Language'] = 'zh-CN,zh;q=0.9,en;q=0.8'
     
     kwargs['headers'] = headers
-    return original_request(self, method, url, *args, **kwargs)
+    return original_session_request(self, method, url, *args, **kwargs)
 
-# Monkeypatch Session.request to catch all outbound requests via requests library
-Session.request = spoofed_request
-# Also patch the functional API as a fallback
-requests.api.request = spoofed_request
+# Apply the patch to Session.request
+Session.request = spoofed_session_request
+
+# Functional API patch (requests.get, requests.post, etc. use requests.api.request)
+original_api_request = requests.api.request
+def spoofed_api_request(method, url, **kwargs):
+    headers = kwargs.get('headers', {})
+    if not headers:
+        headers = {}
+    else:
+        headers = headers.copy()
+    if 'User-Agent' not in headers:
+        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    kwargs['headers'] = headers
+    return original_api_request(method, url, **kwargs)
+
+requests.api.request = spoofed_api_request
+# Also update the shortcut in the requests module itself
+requests.request = spoofed_api_request
 
 # --- Configuration ---
 CACHE_DIR = "data_cache"
@@ -176,7 +194,7 @@ def fetch_target_industry_pool():
                 print(f"   ⚠️ {industry}: No stocks found via EM")
         except Exception as e:
             print(f"   ❌ Error fetching {industry}: {e}")
-        time.sleep(0.1) 
+        time.sleep(0.5) 
         
     if not pool_dfs:
         return pd.DataFrame()
