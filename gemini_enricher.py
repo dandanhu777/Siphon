@@ -5,7 +5,7 @@ import os
 # Config — v4.6: API Key from environment variable
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
 ENDPOINTS = [
-    "http://127.0.0.1:8045/v1",       # 1. Local Only
+    "https://generativelanguage.googleapis.com/v1beta/openai", # Official Gemini API
 ]
 MODEL_NAME = "gemini-2.5-flash"
 
