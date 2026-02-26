@@ -24,9 +24,8 @@ if [ -f .env ]; then
     echo "✅ Environment variables loaded from .env"
 fi
 
-# 0.1: Disable proxy for domestic sites (eastmoney, sina, etc)
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
-echo "✅ Proxy disabled for data fetching."
+# 0.1: Proxy enabled for data fetching (from .env or system env)
+echo "✅ Proxy enabled for data fetching."
 echo ""
 
 # 0.5: Trading Day Check

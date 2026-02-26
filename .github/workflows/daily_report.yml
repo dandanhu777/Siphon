@@ -34,6 +34,8 @@ jobs:
         # API Keys if needed
         LLM_API_KEY: ${{ secrets.LLM_API_KEY }} 
         MAIL_RECEIVERS_LIST: ${{ secrets.MAIL_RECEIVERS_LIST }} 
+        http_proxy: ${{ secrets.HTTP_PROXY }}
+        https_proxy: ${{ secrets.HTTPS_PROXY }}
       run: |
         python siphon_strategy.py
         python fallback_email_sender.py
