@@ -32,11 +32,17 @@ def spoofed_session_request(self, method, url, *args, **kwargs):
         # Standard realistic browser UA
         headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     
-    # Standard browser headers to ensure it looks like a real browser
+    # Extra browser headers for realism
     if 'Accept' not in headers:
         headers['Accept'] = 'application/json, text/plain, */*'
     if 'Accept-Language' not in headers:
         headers['Accept-Language'] = 'zh-CN,zh;q=0.9,en;q=0.8'
+    if 'Connection' not in headers:
+        headers['Connection'] = 'keep-alive'
+    
+    # Set a default timeout if not provided to prevent hanging
+    if 'timeout' not in kwargs:
+        kwargs['timeout'] = 30
     
     kwargs['headers'] = headers
     return original_session_request(self, method, url, *args, **kwargs)
@@ -44,21 +50,18 @@ def spoofed_session_request(self, method, url, *args, **kwargs):
 # Apply the patch to Session.request
 Session.request = spoofed_session_request
 
-# Functional API patch (requests.get, requests.post, etc. use requests.api.request)
+# Functional API patch
 original_api_request = requests.api.request
 def spoofed_api_request(method, url, **kwargs):
-    headers = kwargs.get('headers', {})
-    if not headers:
-        headers = {}
-    else:
-        headers = headers.copy()
-    if 'User-Agent' not in headers:
-        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    kwargs['headers'] = headers
+    if 'headers' not in kwargs:
+        kwargs['headers'] = {}
+    if 'User-Agent' not in kwargs['headers']:
+        kwargs['headers']['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    if 'timeout' not in kwargs:
+        kwargs['timeout'] = 30
     return original_api_request(method, url, **kwargs)
 
 requests.api.request = spoofed_api_request
-# Also update the shortcut in the requests module itself
 requests.request = spoofed_api_request
 
 # --- Configuration ---
@@ -194,7 +197,7 @@ def fetch_target_industry_pool():
                 print(f"   ⚠️ {industry}: No stocks found via EM")
         except Exception as e:
             print(f"   ❌ Error fetching {industry}: {e}")
-        time.sleep(0.5) 
+        time.sleep(1.0) 
         
     if not pool_dfs:
         return pd.DataFrame()
@@ -396,32 +399,33 @@ def fetch_basic_pool():
         industry_source = None
         merged = pd.DataFrame()
 
-        # Tier 1: Batch Industry Board API (Fastest)
-        print("   Tier 1: Trying Batch Industry API...")
-        industry_pool = fetch_target_industry_pool()
-        if not industry_pool.empty:
+        # Tier 1: Semi-Batch Growth/Industry API (Most Stable - uses datacenter-web)
+        print("   Tier 1: Trying Semi-Batch Growth API (Stable Tier)...")
+        growth_df_cached = get_industry_data_robustly()
+        if not growth_df_cached.empty and '所处行业' in growth_df_cached.columns:
+            def is_target(x):
+                # Handle cases where multiple industries are listed combined
+                return isinstance(x, str) and any(t in x for t in TARGET_INDUSTRIES)
+            
+            growth_df_cached['Symbol'] = growth_df_cached['股票代码'].astype(str).str.zfill(6)
+            target_growth = growth_df_cached[growth_df_cached['所处行业'].apply(is_target)].copy()
+            target_growth = target_growth.rename(columns={'所处行业': 'Industry'})
+            
             spot_df['Symbol'] = spot_df['Symbol'].astype(str).str.zfill(6)
-            merged = pd.merge(spot_df, industry_pool[['Symbol', 'Industry']], on='Symbol', how='inner')
+            merged = pd.merge(spot_df, target_growth[['Symbol', 'Industry']], on='Symbol', how='inner')
             if not merged.empty:
-                industry_source = "batch_em"
+                industry_source = "growth_em"
                 print(f"   ✅ Tier 1 Success: {len(merged)} stocks matched")
 
-        # Tier 2: Semi-Batch Growth/Industry API (Robust)
+        # Tier 2: Batch Industry Board API (Fast but hits push servers)
         if merged.empty:
-            print("   Tier 1 failed. Tier 2: Trying Semi-Batch Growth API...")
-            growth_df_cached = get_industry_data_robustly()
-            if not growth_df_cached.empty and '所处行业' in growth_df_cached.columns:
-                def is_target(x):
-                    return isinstance(x, str) and any(t in x for t in TARGET_INDUSTRIES)
-                
-                growth_df_cached['Symbol'] = growth_df_cached['股票代码'].astype(str).str.zfill(6)
-                target_growth = growth_df_cached[growth_df_cached['所处行业'].apply(is_target)].copy()
-                target_growth = target_growth.rename(columns={'所处行业': 'Industry'})
-                
+            print("   Tier 1 failed. Tier 2: Trying Batch Industry API (Push Tier)...")
+            industry_pool = fetch_target_industry_pool()
+            if not industry_pool.empty:
                 spot_df['Symbol'] = spot_df['Symbol'].astype(str).str.zfill(6)
-                merged = pd.merge(spot_df, target_growth[['Symbol', 'Industry']], on='Symbol', how='inner')
+                merged = pd.merge(spot_df, industry_pool[['Symbol', 'Industry']], on='Symbol', how='inner')
                 if not merged.empty:
-                    industry_source = "growth_em"
+                    industry_source = "batch_em"
                     print(f"   ✅ Tier 2 Success: {len(merged)} stocks matched")
 
         # Tier 3: Filter-First Per-stock Lookup (Ultimate Fallback)
