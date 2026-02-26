@@ -206,6 +206,16 @@ def fetch_industry_per_stock(symbols):
 
 def fetch_basic_pool():
     print("Fetching Spot Data (Market Cap & Industry)...")
+    # 0. Proxy Debug Check (GHA)
+    proxy_env = os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY")
+    if proxy_env:
+        # Mask password for logs: http://user:pass@ip:port -> http://***@ip:port
+        import re
+        masked = re.sub(r'//.*:.*@', '//***:***@', proxy_env)
+        print(f"🌐 Proxy detected in environment: {masked}")
+    else:
+        print("⚠️ No proxy detected in environment.")
+
     spot_df = None
     source = None
     
