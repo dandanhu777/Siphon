@@ -37,8 +37,13 @@ env_receivers_str = os.environ.get("MAIL_RECEIVERS_LIST")
 if env_receivers_str:
     MAIL_RECEIVERS = [x.strip() for x in env_receivers_str.split(",")]
 else:
-    # Minimal fallback or empty
-    MAIL_RECEIVERS = ["tosinx@gmail.com", "32598630@qq.com"] # Default fallback
+    # Merged fallback list from .env and code defaults
+    MAIL_RECEIVERS = [
+        "28595591@qq.com", "89299772@qq.com", "milsica@gmail.com", 
+        "tosinx@gmail.com", "874686267@qq.com", "zhengzheng.duan@kone.com", 
+        "8871802@qq.com", "171754089@qq.com", "840276240@qq.com", 
+        "525624506@qq.com", "gaoyi@mininggoat.com", "32598630@qq.com"
+    ]
 
 CSV_PATH = "siphon_strategy_results.csv"
 
