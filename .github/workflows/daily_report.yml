@@ -41,3 +41,11 @@ jobs:
       run: |
         python siphon_strategy.py
         python fallback_email_sender.py
+        
+    - name: Persist Data & History
+      run: |
+        git config --global user.name "GitHub Action"
+        git config --global user.email "action@github.com"
+        git add boomerang_tracker.db siphon_strategy_results.csv index_multi_cache.json
+        git commit -m "chore: auto-update tracking history and results [skip ci]" || echo "No changes to commit"
+        git push

@@ -12,12 +12,12 @@ venv/
 # Data Files (Keep structure but don't commit big data/cache)
 data_cache/
 backtest_cache/
-boomerang_tracker.db
+# boomerang_tracker.db  <-- Removed from ignore to persist history in GHA
 *.log
-siphon_strategy_results.csv
+# siphon_strategy_results.csv  <-- Un-ignored for GHA persistence
 siphon_strategy_results_partial.csv
 index_history_cache.csv
-index_multi_cache.json
+# index_multi_cache.json  <-- Un-ignored for GHA persistence
 backtest_result*.csv
 
 # Secrets logic
