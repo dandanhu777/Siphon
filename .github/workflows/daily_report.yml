@@ -11,6 +11,8 @@ on:
 jobs:
   run-report:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required to push database changes back to the repo
     
     steps:
     - name: Checkout code
@@ -48,4 +50,4 @@ jobs:
         git config --global user.email "action@github.com"
         git add boomerang_tracker.db siphon_strategy_results.csv index_multi_cache.json
         git commit -m "chore: auto-update tracking history and results [skip ci]" || echo "No changes to commit"
-        git push
+        git push origin main
