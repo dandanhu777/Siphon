@@ -121,6 +121,57 @@ def get_industry_data_robustly():
 
     return pd.DataFrame()
 
+
+def fetch_industry_per_stock(symbols):
+    """Fetch industry for a list of stock codes using stock_individual_info_em.
+    Returns a dict {code: industry}. Reliable: 0.3s/stock, no pagination."""
+    CACHE_PATH = os.path.join(CACHE_DIR, "industry_map_cache.pkl")
+    CACHE_TTL_HOURS = 24
+
+    # Load existing cache
+    industry_map = {}
+    if os.path.exists(CACHE_PATH):
+        try:
+            age_hours = (time.time() - os.path.getmtime(CACHE_PATH)) / 3600
+            if age_hours < CACHE_TTL_HOURS:
+                industry_map = pd.read_pickle(CACHE_PATH)
+                # Check if we already have all needed symbols
+                missing = [s for s in symbols if s not in industry_map]
+                if not missing:
+                    print(f"   ✅ Using cached industry map ({len(industry_map)} stocks, age={age_hours:.1f}h)")
+                    return industry_map
+                print(f"   📋 Cache has {len(industry_map)} stocks, fetching {len(missing)} new...")
+            else:
+                industry_map = {}  # Expired
+        except Exception:
+            industry_map = {}
+
+    # Fetch missing symbols
+    missing = [s for s in symbols if s not in industry_map]
+    fetched = 0
+    for code in missing:
+        try:
+            info = ak.stock_individual_info_em(symbol=code)
+            row = dict(zip(info['item'], info['value']))
+            industry_map[code] = row.get('行业', 'Unknown')
+            fetched += 1
+            if fetched % 50 == 0:
+                print(f"   ... fetched industry for {fetched}/{len(missing)} stocks")
+        except Exception:
+            industry_map[code] = 'Unknown'
+        time.sleep(0.1)
+
+    # Save updated cache
+    try:
+        pd.to_pickle(industry_map, CACHE_PATH)
+        print(f"   💾 Cached industry map ({len(industry_map)} stocks)")
+    except Exception:
+        pass
+
+    print(f"   ✅ Industry data: {fetched} fetched, {len(industry_map)} total")
+    return industry_map
+
+
 # --- Data Fetching ---
 
 
@@ -252,17 +303,39 @@ def fetch_basic_pool():
             '总市值': 'Market_Cap'
         }
         
-        print("Fetching Industry & Growth Data...")
-        growth_df = growth_df_cached if growth_df_cached is not None else get_industry_data_robustly()
-             
-        if '所处行业' in growth_df.columns:
-            growth_df = growth_df[['股票代码', '所处行业', '净利润-同比增长']]
-            growth_df.columns = ['Symbol', 'Industry', 'Growth_Rate']
-        else:
-            return pd.DataFrame()
-
         spot_df = spot_df.rename(columns=col_map)
-        merged = pd.merge(spot_df, growth_df, on='Symbol', how='inner')
+
+        # --- Step A: Get Industry via per-stock API (reliable, no pagination) ---
+        print("Fetching Industry Data (per-stock API)...")
+        all_symbols = spot_df['Symbol'].astype(str).str.zfill(6).tolist()
+        industry_map = fetch_industry_per_stock(all_symbols)
+        spot_df['Industry'] = spot_df['Symbol'].astype(str).str.zfill(6).map(industry_map)
+
+        # Filter to target industries
+        def is_target_industry(ind_name):
+            if not isinstance(ind_name, str): return False
+            return any(target in ind_name for target in TARGET_INDUSTRIES)
+        
+        merged = spot_df[spot_df['Industry'].apply(is_target_industry)].copy()
+        if merged.empty:
+            print("❌ No stocks matched target industries")
+            return pd.DataFrame()
+        print(f"📊 Industry-filtered: {len(merged)} stocks")
+
+        # --- Step B: Try to enrich with Growth Data (optional) ---
+        print("Fetching Growth Data (optional, stock_yjbb_em)...")
+        growth_df = growth_df_cached if growth_df_cached is not None else get_industry_data_robustly()
+        
+        if not growth_df.empty and '净利润-同比增长' in growth_df.columns:
+            growth_lookup = growth_df[['股票代码', '净利润-同比增长']].copy()
+            growth_lookup.columns = ['Symbol', 'Growth_Rate']
+            growth_lookup['Symbol'] = growth_lookup['Symbol'].astype(str).str.zfill(6)
+            merged = pd.merge(merged, growth_lookup, on='Symbol', how='left')
+            merged['Growth_Rate'] = merged['Growth_Rate'].fillna(0)
+            print(f"✅ Growth data enriched")
+        else:
+            print("⚠️ Growth data unavailable, skipping PEG filter")
+            merged['Growth_Rate'] = 0
         
         # For non-EastMoney sources: try to enrich Market Cap
         if source in ("tencent", "hist_fallback"):
@@ -280,11 +353,6 @@ def fetch_basic_pool():
         merged['Market_Cap'] = pd.to_numeric(merged['Market_Cap'], errors='coerce')
         merged = merged[merged['Market_Cap'] >= MIN_MARKET_CAP]
         
-        def is_target_industry(ind_name):
-            if not isinstance(ind_name, str): return False
-            return any(target in ind_name for target in TARGET_INDUSTRIES)
-            
-        merged = merged[merged['Industry'].apply(is_target_industry)]
         print(f"✅ Final pool: {len(merged)} stocks (source: {source})")
         return merged
     except Exception as e:
@@ -682,11 +750,13 @@ def _filter_fundamentals(row, market, cfg=CONFIG):
     if market == 'CN':
         pe_ttm = pd.to_numeric(row.get('PE_TTM', 0), errors='coerce')
         growth = pd.to_numeric(row.get('Growth_Rate', 0), errors='coerce')
-        if pd.isna(growth): return False, change_pct
+        if pd.isna(growth): growth = 0
         if pd.isna(pe_ttm): pe_ttm = 0
-        peg = pe_ttm / growth if growth > 0 else 999
-        fund_ok = (growth > cfg.high_growth) or (peg < cfg.max_peg and growth > cfg.min_growth)
-        if not fund_ok: return False, change_pct
+        # When growth data is unavailable (0), skip PEG filter gracefully
+        if growth != 0:
+            peg = pe_ttm / growth if growth > 0 else 999
+            fund_ok = (growth > cfg.high_growth) or (peg < cfg.max_peg and growth > cfg.min_growth)
+            if not fund_ok: return False, change_pct
 
     return True, change_pct
 
