@@ -742,6 +742,9 @@ def generate_report():
             original_HTTPS_PROXY = os.environ.pop('HTTPS_PROXY', None)
             
             try:
+                if not MAIL_USER or not MAIL_PASS:
+                    raise ValueError("❌ Missing MAIL_USER or MAIL_PASS environment variables. Please set them in GitHub Secrets.")
+
                 smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=60)
                 # Python 3.9 smtplib bug workaround: AUTH can fail with str+bytes error.
                 # Use manual AUTH LOGIN as fallback.

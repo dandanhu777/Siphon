@@ -11,9 +11,9 @@ MODEL_NAME = "gemini-2.5-flash"
 
 def enrich_top_picks(stock_list):
     """
-    Takes stock list. Returns enrichment dict.
-    Fields: business, us_bench, target_price
+    AI Enrichment Disabled by User. Returning empty mapping.
     """
+    return {}
     data_map = {}
     
     # --- Expert Fallback Data (Historical + Current) ---
