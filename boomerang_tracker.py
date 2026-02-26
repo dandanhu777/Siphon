@@ -12,6 +12,14 @@ import akshare as ak
 import pickle
 import time
 
+# v10.1.1: Fix Python 3.12+ sqlite3 DeprecationWarning for date adapters
+def _register_sqlite_fix():
+    import sqlite3
+    sqlite3.register_adapter(datetime.date, lambda v: v.isoformat())
+    sqlite3.register_adapter(datetime.datetime, lambda v: v.isoformat())
+
+_register_sqlite_fix()
+
 # Database path
 DB_PATH = "boomerang_tracker.db"
 
@@ -100,7 +108,7 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             stock_code TEXT NOT NULL,
             stock_name TEXT NOT NULL,
-            rec_date DATE NOT NULL,
+            rec_date TEXT NOT NULL,
             rec_price REAL NOT NULL,
             strategy_tag TEXT,
             siphon_score REAL DEFAULT 0,
@@ -130,7 +138,7 @@ def init_database():
         CREATE TABLE IF NOT EXISTS daily_performance (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             rec_id INTEGER NOT NULL,
-            trade_date DATE NOT NULL,
+            trade_date TEXT NOT NULL,
             close_price REAL NOT NULL,
             daily_change_pct REAL,
             cumulative_return REAL,
