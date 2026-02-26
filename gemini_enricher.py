@@ -101,7 +101,7 @@ def enrich_top_picks(stock_list):
         for url in ENDPOINTS:
             print(f"📡 Trying Endpoint: {url} ...")
             try:
-                client = OpenAI(api_key=API_KEY, base_url=url, timeout=10.0) # Lower timeout for failover
+                client = OpenAI(api_key=API_KEY, base_url=url, timeout=30.0) # Increased timeout for reliability
                 response = client.chat.completions.create(
                     model=MODEL_NAME, 
                     messages=[{"role": "user", "content": prompt}],

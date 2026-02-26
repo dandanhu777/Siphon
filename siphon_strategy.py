@@ -10,78 +10,8 @@ import pickle
 import random
 
 
-# Suppress warnings
-warnings.filterwarnings('ignore')
-
-# --- Header Spoofing for Akshare (Anti-Bot Bypass) ---
-import requests
-from requests.sessions import Session
-
-# We patch Session.request because most libraries (including akshare) 
-# eventually use a Session or the functional API which uses a default session.
-original_session_request = Session.request
-
-def spoofed_session_request(self, method, url, *args, **kwargs):
-    headers = kwargs.get('headers', {})
-    if not headers:
-        headers = {}
-    else:
-        headers = headers.copy()
-        
-    if 'User-Agent' not in headers:
-        # Standard realistic browser UA
-        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    
-    # Extra browser headers for realism
-    if 'Accept' not in headers:
-        headers['Accept'] = 'application/json, text/plain, */*'
-    if 'Accept-Language' not in headers:
-        headers['Accept-Language'] = 'zh-CN,zh;q=0.9,en;q=0.8'
-    if 'Connection' not in headers:
-        headers['Connection'] = 'keep-alive'
-    
-    # Set a default timeout if not provided to prevent hanging
-    if 'timeout' not in kwargs:
-        kwargs['timeout'] = 30
-    
-    kwargs['headers'] = headers
-    return original_session_request(self, method, url, *args, **kwargs)
-
-# Apply the patch to Session.request
-Session.request = spoofed_session_request
-
-# Functional API patch
-original_api_request = requests.api.request
-def spoofed_api_request(method, url, **kwargs):
-    # Ensure headers exists and has a browser UA
-    headers = kwargs.get('headers', {})
-    if not headers:
-        headers = {}
-    else:
-        headers = headers.copy()
-        
-    if 'User-Agent' not in headers:
-        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    
-    # Optional additional headers
-    if 'Accept' not in headers:
-        headers['Accept'] = 'application/json, text/plain, */*'
-    
-    kwargs['headers'] = headers
-    
-    # Global timeout fallback
-    if 'timeout' not in kwargs:
-        kwargs['timeout'] = 30
-        
-    return original_api_request(method, url, **kwargs)
-
-# Universal patch for all requests entry points
-requests.api.request = spoofed_api_request
-requests.Session.request = spoofed_session_request
-requests.request = spoofed_api_request
-# Also patch the shortcuts just in case
-requests.get = lambda url, **kwargs: spoofed_api_request('GET', url, **kwargs)
-requests.post = lambda url, **kwargs: spoofed_api_request('POST', url, **kwargs)
+# --- Global Configuration & Patching ---
+import requests_patch
 
 # --- Configuration ---
 CACHE_DIR = "data_cache"

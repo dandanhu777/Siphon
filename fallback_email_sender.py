@@ -1,4 +1,5 @@
 print("DEBUG: Script started...")
+import requests_patch
 import smtplib
 from email.mime.text import MIMEText
 from email.header import Header

@@ -36,6 +36,7 @@ jobs:
         MAIL_RECEIVERS_LIST: ${{ secrets.MAIL_RECEIVERS_LIST }} 
         http_proxy: ${{ secrets.HTTP_PROXY }}
         https_proxy: ${{ secrets.HTTPS_PROXY }}
+        no_proxy: "localhost,127.0.0.1,googleapis.com,gmail.com,smtp.gmail.com,github.com"
       run: |
         python siphon_strategy.py
         python fallback_email_sender.py
