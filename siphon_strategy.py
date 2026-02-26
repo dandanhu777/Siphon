@@ -122,54 +122,39 @@ def get_industry_data_robustly():
     return pd.DataFrame()
 
 
-def fetch_industry_per_stock(symbols):
-    """Fetch industry for a list of stock codes using stock_individual_info_em.
-    Returns a dict {code: industry}. Reliable: 0.3s/stock, no pagination."""
-    CACHE_PATH = os.path.join(CACHE_DIR, "industry_map_cache.pkl")
-    CACHE_TTL_HOURS = 24
-
-    # Load existing cache
-    industry_map = {}
-    if os.path.exists(CACHE_PATH):
+def fetch_target_industry_pool():
+    """v10.1: Fetch all stocks belonging to TARGET_INDUSTRIES using batch industry API.
+    Returns a DataFrame with columns ['Symbol', 'Name', 'Industry'].
+    Reliable: ~11 requests total instead of 5000."""
+    pool_dfs = []
+    print(f"🔍 Fetching component stocks for {len(TARGET_INDUSTRIES)} target industries...")
+    
+    for industry in TARGET_INDUSTRIES:
         try:
-            age_hours = (time.time() - os.path.getmtime(CACHE_PATH)) / 3600
-            if age_hours < CACHE_TTL_HOURS:
-                industry_map = pd.read_pickle(CACHE_PATH)
-                # Check if we already have all needed symbols
-                missing = [s for s in symbols if s not in industry_map]
-                if not missing:
-                    print(f"   ✅ Using cached industry map ({len(industry_map)} stocks, age={age_hours:.1f}h)")
-                    return industry_map
-                print(f"   📋 Cache has {len(industry_map)} stocks, fetching {len(missing)} new...")
+            # This API returns all stocks in the specified industry board
+            df = ak.stock_board_industry_cons_em(symbol=industry)
+            if df is not None and not df.empty:
+                # Standardize columns: '代码' -> 'Symbol', '名称' -> 'Name'
+                df = df[['代码', '名称']].copy()
+                df.columns = ['Symbol', 'Name']
+                # Clean up Symbol column (remove any sh/sz prefix if present, though EM normally doesn't have them)
+                df['Symbol'] = df['Symbol'].astype(str).str.zfill(6)
+                df['Industry'] = industry
+                pool_dfs.append(df)
+                print(f"   ✅ {industry}: {len(df)} stocks")
             else:
-                industry_map = {}  # Expired
-        except Exception:
-            industry_map = {}
-
-    # Fetch missing symbols
-    missing = [s for s in symbols if s not in industry_map]
-    fetched = 0
-    for code in missing:
-        try:
-            info = ak.stock_individual_info_em(symbol=code)
-            row = dict(zip(info['item'], info['value']))
-            industry_map[code] = row.get('行业', 'Unknown')
-            fetched += 1
-            if fetched % 50 == 0:
-                print(f"   ... fetched industry for {fetched}/{len(missing)} stocks")
-        except Exception:
-            industry_map[code] = 'Unknown'
-        time.sleep(0.1)
-
-    # Save updated cache
-    try:
-        pd.to_pickle(industry_map, CACHE_PATH)
-        print(f"   💾 Cached industry map ({len(industry_map)} stocks)")
-    except Exception:
-        pass
-
-    print(f"   ✅ Industry data: {fetched} fetched, {len(industry_map)} total")
-    return industry_map
+                print(f"   ⚠️ {industry}: No stocks found via EM")
+        except Exception as e:
+            print(f"   ❌ Error fetching {industry}: {e}")
+        time.sleep(0.1) 
+        
+    if not pool_dfs:
+        return pd.DataFrame()
+        
+    full_pool = pd.concat(pool_dfs, ignore_index=True)
+    full_pool = full_pool.drop_duplicates(subset=['Symbol'])
+    print(f"📊 Total industry pool: {len(full_pool)} stocks")
+    return full_pool
 
 
 # --- Data Fetching ---
@@ -216,16 +201,15 @@ def fetch_basic_pool():
     if spot_df is None or spot_df.empty:
         print("🔄 Trying Sina Daily Bars fallback (always available)...")
         try:
-            # Get industry/growth data first to know which stocks to fetch
-            growth_df_cached = get_industry_data_robustly()
+            # Get industry pool first to know which stocks to fetch
+            target_stocks = fetch_target_industry_pool()
             
-            if '所处行业' not in growth_df_cached.columns:
+            if target_stocks.empty:
                 print("❌ No industry data available")
                 return pd.DataFrame()
             
-            target_stocks = growth_df_cached[growth_df_cached['所处行业'].apply(
-                lambda x: isinstance(x, str) and any(t in x for t in TARGET_INDUSTRIES)
-            )].copy()
+            # Map for Sina loop consistency
+            target_stocks = target_stocks.rename(columns={'Symbol': '股票代码', 'Name': '股票简称', 'Industry': '所处行业'})
             
             # Shuffle to avoid always hitting same stocks on retry
             target_stocks = target_stocks.sample(frac=1).reset_index(drop=True)
@@ -305,22 +289,17 @@ def fetch_basic_pool():
         
         spot_df = spot_df.rename(columns=col_map)
 
-        # --- Step A: Get Industry via per-stock API (reliable, no pagination) ---
-        print("Fetching Industry Data (per-stock API)...")
-        all_symbols = spot_df['Symbol'].astype(str).str.zfill(6).tolist()
-        industry_map = fetch_industry_per_stock(all_symbols)
-        spot_df['Industry'] = spot_df['Symbol'].astype(str).str.zfill(6).map(industry_map)
-
-        # Filter to target industries
-        def is_target_industry(ind_name):
-            if not isinstance(ind_name, str): return False
-            return any(target in ind_name for target in TARGET_INDUSTRIES)
-        
-        merged = spot_df[spot_df['Industry'].apply(is_target_industry)].copy()
-        if merged.empty:
-            print("❌ No stocks matched target industries")
+        # --- Step A: Filter by Target Industries (Reliable Batch API) ---
+        print("Filtering by Target Industries (Batch API)...")
+        industry_pool = fetch_target_industry_pool()
+        if industry_pool.empty:
+            print("❌ No industry data available")
             return pd.DataFrame()
-        print(f"📊 Industry-filtered: {len(merged)} stocks")
+            
+        # Merge spot data with industry pool (Inner join = only target stocks)
+        spot_df['Symbol'] = spot_df['Symbol'].astype(str).str.zfill(6)
+        merged = pd.merge(spot_df, industry_pool[['Symbol', 'Industry']], on='Symbol', how='inner')
+        print(f"📊 Industry-filtered: {len(merged)} stocks matched/merged")
 
         # --- Step B: Try to enrich with Growth Data (optional) ---
         print("Fetching Growth Data (optional, stock_yjbb_em)...")
