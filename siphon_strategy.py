@@ -157,6 +157,50 @@ def fetch_target_industry_pool():
     return full_pool
 
 
+def fetch_industry_per_stock(symbols):
+    """v10.1.2: Fetch industry for a list of stock codes using stock_individual_info_em.
+    Returns a dict {code: industry}. Only used as ultimate fallback.
+    Optimized for small batches (~500 stocks)."""
+    CACHE_PATH = os.path.join(CACHE_DIR, "industry_map_cache.pkl")
+    CACHE_TTL_HOURS = 24
+
+    # Load existing cache
+    industry_map = {}
+    if os.path.exists(CACHE_PATH):
+        try:
+            age_hours = (time.time() - os.path.getmtime(CACHE_PATH)) / 3600
+            if age_hours < CACHE_TTL_HOURS:
+                industry_map = pd.read_pickle(CACHE_PATH)
+        except Exception: pass
+
+    # Fetch missing symbols
+    missing = [s for s in symbols if s not in industry_map]
+    if not missing:
+        return industry_map
+
+    print(f"   📋 Fetching industry for {len(missing)} stocks (Sequential)...")
+    fetched = 0
+    for code in missing:
+        try:
+            info = ak.stock_individual_info_em(symbol=code)
+            row = dict(zip(info['item'], info['value']))
+            industry_map[code] = row.get('行业', 'Unknown')
+            fetched += 1
+            if fetched % 50 == 0:
+                print(f"   ... progress {fetched}/{len(missing)}")
+        except Exception:
+            industry_map[code] = 'Unknown'
+        time.sleep(0.05) 
+
+    # Save updated cache
+    try:
+        if not os.path.exists(CACHE_DIR): os.makedirs(CACHE_DIR)
+        pd.to_pickle(industry_map, CACHE_PATH)
+    except Exception: pass
+
+    return industry_map
+
+
 # --- Data Fetching ---
 
 
@@ -289,17 +333,76 @@ def fetch_basic_pool():
         
         spot_df = spot_df.rename(columns=col_map)
 
-        # --- Step A: Filter by Target Industries (Reliable Batch API) ---
-        print("Filtering by Target Industries (Batch API)...")
+        # --- Step A: Get Industry Data (Cascading Fallback) ---
+        print("🔍 Step A: Fetching Industry Data (Multi-tier Fallback)...")
+        industry_source = None
+        merged = pd.DataFrame()
+
+        # Tier 1: Batch Industry Board API (Fastest)
+        print("   Tier 1: Trying Batch Industry API...")
         industry_pool = fetch_target_industry_pool()
-        if industry_pool.empty:
-            print("❌ No industry data available")
+        if not industry_pool.empty:
+            spot_df['Symbol'] = spot_df['Symbol'].astype(str).str.zfill(6)
+            merged = pd.merge(spot_df, industry_pool[['Symbol', 'Industry']], on='Symbol', how='inner')
+            if not merged.empty:
+                industry_source = "batch_em"
+                print(f"   ✅ Tier 1 Success: {len(merged)} stocks matched")
+
+        # Tier 2: Semi-Batch Growth/Industry API (Robust)
+        if merged.empty:
+            print("   Tier 1 failed. Tier 2: Trying Semi-Batch Growth API...")
+            growth_df_cached = get_industry_data_robustly()
+            if not growth_df_cached.empty and '所处行业' in growth_df_cached.columns:
+                def is_target(x):
+                    return isinstance(x, str) and any(t in x for t in TARGET_INDUSTRIES)
+                
+                growth_df_cached['Symbol'] = growth_df_cached['股票代码'].astype(str).str.zfill(6)
+                target_growth = growth_df_cached[growth_df_cached['所处行业'].apply(is_target)].copy()
+                target_growth = target_growth.rename(columns={'所处行业': 'Industry'})
+                
+                spot_df['Symbol'] = spot_df['Symbol'].astype(str).str.zfill(6)
+                merged = pd.merge(spot_df, target_growth[['Symbol', 'Industry']], on='Symbol', how='inner')
+                if not merged.empty:
+                    industry_source = "growth_em"
+                    print(f"   ✅ Tier 2 Success: {len(merged)} stocks matched")
+
+        # Tier 3: Filter-First Per-stock Lookup (Ultimate Fallback)
+        if merged.empty:
+            print("   Tier 1 & 2 failed. Tier 3: Filter-First + Per-stock scan...")
+            # Pre-filter spot_df to reduce scan size (Market Cap > 20B, Price > 2.0)
+            candidates = spot_df.copy()
+            candidates['Market_Cap'] = pd.to_numeric(candidates['Market_Cap'], errors='coerce')
+            
+            # If Market_Cap is missing (common in tencent source), use Price/Change criteria to at least reduce.
+            # But normally we want Market Cap. If it's 0 (tencent), we keep all but rely on Price.
+            filtered_cands = candidates[
+                ((candidates['Market_Cap'] >= MIN_MARKET_CAP) | (candidates['Market_Cap'] == 0)) & 
+                (candidates['Price'] >= 2.0)
+            ].copy()
+            
+            print(f"   📋 Filtered to {len(filtered_cands)} candidates for scan...")
+            cand_symbols = filtered_cands['Symbol'].tolist()
+            # Shuffle to handle partial timeouts better in retries
+            import random
+            random.shuffle(cand_symbols)
+            
+            # Fetch industry for only these candidates
+            scanned_map = fetch_industry_per_stock(cand_symbols)
+            filtered_cands['Industry'] = filtered_cands['Symbol'].map(scanned_map)
+            
+            def is_target(x):
+                return isinstance(x, str) and any(t in x for t in TARGET_INDUSTRIES)
+            
+            merged = filtered_cands[filtered_cands['Industry'].apply(is_target)].copy()
+            if not merged.empty:
+                industry_source = "per_stock_scan"
+                print(f"   ✅ Tier 3 Success: {len(merged)} stocks matched")
+
+        if merged.empty:
+            print("❌ All industry-fetching tiers failed")
             return pd.DataFrame()
             
-        # Merge spot data with industry pool (Inner join = only target stocks)
-        spot_df['Symbol'] = spot_df['Symbol'].astype(str).str.zfill(6)
-        merged = pd.merge(spot_df, industry_pool[['Symbol', 'Industry']], on='Symbol', how='inner')
-        print(f"📊 Industry-filtered: {len(merged)} stocks matched/merged")
+        print(f"📊 Industry Logic Complete (Source: {industry_source})")
 
         # --- Step B: Try to enrich with Growth Data (optional) ---
         print("Fetching Growth Data (optional, stock_yjbb_em)...")
