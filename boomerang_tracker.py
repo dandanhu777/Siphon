@@ -103,10 +103,27 @@ def init_database():
             rec_date DATE NOT NULL,
             rec_price REAL NOT NULL,
             strategy_tag TEXT,
+            siphon_score REAL DEFAULT 0,
+            industry TEXT DEFAULT '',
+            core_logic TEXT DEFAULT '',
             status TEXT DEFAULT 'Active',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    # Migrate existing DBs: add columns if missing
+    try:
+        cursor.execute("SELECT siphon_score FROM recommendations LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE recommendations ADD COLUMN siphon_score REAL DEFAULT 0")
+    try:
+        cursor.execute("SELECT industry FROM recommendations LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE recommendations ADD COLUMN industry TEXT DEFAULT ''")
+    try:
+        cursor.execute("SELECT core_logic FROM recommendations LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE recommendations ADD COLUMN core_logic TEXT DEFAULT ''")
     
     # Daily performance tracking table
     cursor.execute("""
@@ -388,9 +405,8 @@ def calculate_strategy_metrics(strategy_tag: str = None) -> Dict:
     
     return metrics
 
-# Initialize database on import
-if not os.path.exists(DB_PATH):
-    init_database()
+# Initialize database on import (also runs migrations for existing DBs)
+init_database()
 
 # --- v7.1 CSV Sync Module ---
 

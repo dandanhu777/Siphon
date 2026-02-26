@@ -26,8 +26,11 @@ else:
 MAIL_HOST = "smtp.gmail.com"
 MAIL_PORT = 465
 # Use Environment Variables for Security (GitHub Actions) with Local Fallback
-MAIL_USER = os.environ.get("MAIL_USER")
-MAIL_PASS = os.environ.get("MAIL_PASS")
+_raw_user = os.environ.get("MAIL_USER")
+_raw_pass = os.environ.get("MAIL_PASS")
+# Ensure str type (not bytes) and strip whitespace — fixes Python 3.9 smtplib AUTH bug
+MAIL_USER = str(_raw_user).strip() if _raw_user else None
+MAIL_PASS = str(_raw_pass).strip() if _raw_pass else None
 
 # Receivers from Env (Comma separated) or Default
 env_receivers_str = os.environ.get("MAIL_RECEIVERS_LIST")
@@ -726,7 +729,15 @@ def generate_report():
         try:
             logger.info(f"📧 Sending email (attempt {attempt+1}/3)...")
             smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=60)
-            smtp.login(MAIL_USER, MAIL_PASS)
+            # Python 3.9 smtplib bug workaround: AUTH can fail with str+bytes error.
+            # Use manual AUTH LOGIN as fallback.
+            try:
+                smtp.login(MAIL_USER, MAIL_PASS)
+            except TypeError:
+                logger.info("Using manual AUTH LOGIN workaround (Python 3.9 bug)...")
+                import base64
+                smtp.docmd("AUTH", "LOGIN " + base64.b64encode(MAIL_USER.encode()).decode())
+                smtp.docmd(base64.b64encode(MAIL_PASS.encode()).decode())
             smtp.send_message(msg, from_addr=MAIL_USER, to_addrs=MAIL_RECEIVERS)
             smtp.quit()
             logger.info("✅ Report sent successfully.")
