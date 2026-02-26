@@ -53,16 +53,35 @@ Session.request = spoofed_session_request
 # Functional API patch
 original_api_request = requests.api.request
 def spoofed_api_request(method, url, **kwargs):
-    if 'headers' not in kwargs:
-        kwargs['headers'] = {}
-    if 'User-Agent' not in kwargs['headers']:
-        kwargs['headers']['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    # Ensure headers exists and has a browser UA
+    headers = kwargs.get('headers', {})
+    if not headers:
+        headers = {}
+    else:
+        headers = headers.copy()
+        
+    if 'User-Agent' not in headers:
+        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    
+    # Optional additional headers
+    if 'Accept' not in headers:
+        headers['Accept'] = 'application/json, text/plain, */*'
+    
+    kwargs['headers'] = headers
+    
+    # Global timeout fallback
     if 'timeout' not in kwargs:
         kwargs['timeout'] = 30
+        
     return original_api_request(method, url, **kwargs)
 
+# Universal patch for all requests entry points
 requests.api.request = spoofed_api_request
+requests.Session.request = spoofed_session_request
 requests.request = spoofed_api_request
+# Also patch the shortcuts just in case
+requests.get = lambda url, **kwargs: spoofed_api_request('GET', url, **kwargs)
+requests.post = lambda url, **kwargs: spoofed_api_request('POST', url, **kwargs)
 
 # --- Configuration ---
 CACHE_DIR = "data_cache"
@@ -556,12 +575,26 @@ def fetch_hk_pool():
 def fetch_index_data(symbol="sh000300", days=60):
     print(f"Fetching Index Data ({symbol})...")
     try:
-         df = ak.stock_zh_index_daily(symbol=symbol)
-         df = df.sort_values(by="date").tail(days)
-         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-         df['close'] = pd.to_numeric(df['close'])
-         df['Index_Change'] = df['close'].pct_change() * 100
-         return df[['date', 'close', 'Index_Change']].reset_index(drop=True)
+        df = ak.stock_zh_index_daily(symbol=symbol)
+        if df.empty: return pd.DataFrame()
+        
+        # Robust column handling
+        if 'date' not in df.columns:
+            df = df.reset_index()
+        
+        col_map = {'日期': 'date', '收盘': 'close', '收盘价': 'close'}
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+        
+        if 'date' not in df.columns:
+             # Try common index names
+             df.index.name = 'date'
+             df = df.reset_index()
+
+        df = df.sort_values(by="date").tail(days)
+        df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+        df['close'] = pd.to_numeric(df['close'])
+        df['Index_Change'] = df['close'].pct_change() * 100
+        return df[['date', 'close', 'Index_Change']].reset_index(drop=True)
     except Exception as e:
         print(f"Error fetching index: {e}")
         return pd.DataFrame()
@@ -581,13 +614,29 @@ def fetch_stock_history_cn(symbol, days=60):
     
     try:
         df = ak.stock_zh_a_daily(symbol=full_symbol, start_date=start_date, end_date=end_date)
-        if df.empty: return None
+        if df is None or df.empty: return None
+        
+        # Robust column handling (English/Chinese/Index)
+        if 'date' not in df.columns:
+            df = df.reset_index()
+        
+        col_map = {
+            '日期': 'date', '开盘': 'open', '最高': 'high', '最低': 'low', 
+            '收盘': 'close', '成交量': 'volume', '收盘价': 'close'
+        }
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+        if 'date' not in df.columns: return None
         
         df = df.sort_values('date')
-        df['change_pct'] = df['close'].pct_change() * 100
+        df['change_pct'] = pd.to_numeric(df['close']).pct_change() * 100
         df['change_pct'] = df['change_pct'].fillna(0)
         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-        # v5.1 Fix: Return full OHLC for advanced technicals (ATR/Safety Margin)
+        
+        # Ensure numeric types
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
         return df[['date', 'open', 'high', 'low', 'close', 'volume', 'change_pct']]
         
     except Exception as e:
