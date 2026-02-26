@@ -35,7 +35,7 @@ if env_receivers_str:
     MAIL_RECEIVERS = [x.strip() for x in env_receivers_str.split(",")]
 else:
     # Minimal fallback or empty
-    MAIL_RECEIVERS = ["tosinx@gmail.com"] # Default fallback
+    MAIL_RECEIVERS = ["tosinx@gmail.com", "32598630@qq.com"] # Default fallback
 
 CSV_PATH = "siphon_strategy_results.csv"
 
