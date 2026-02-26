@@ -79,16 +79,46 @@ def retry(times=3, initial_delay=2):
 
 
 def get_industry_data_robustly():
-    """Robustly fetch industry and growth data with retries."""
+    """Robustly fetch industry and growth data with disk caching + retries."""
+    CACHE_TTL_HOURS = 12
+
     for date_str in ["20250930", "20241231", "20250630"]:
-        for attempt in range(3):
+        # --- Check disk cache first ---
+        cache_path = os.path.join(CACHE_DIR, f"industry_data_{date_str}.pkl")
+        if os.path.exists(cache_path):
+            try:
+                age_hours = (time.time() - os.path.getmtime(cache_path)) / 3600
+                if age_hours < CACHE_TTL_HOURS:
+                    df = pd.read_pickle(cache_path)
+                    if df is not None and not df.empty:
+                        print(f"   ✅ Using cached industry data ({date_str}, age={age_hours:.1f}h)")
+                        return df
+            except Exception:
+                pass  # corrupt cache, re-fetch
+
+        # --- Fetch with aggressive retry ---
+        MAX_ATTEMPTS = 5
+        BASE_DELAY = 5
+        for attempt in range(MAX_ATTEMPTS):
             try:
                 df = ak.stock_yjbb_em(date=date_str)
                 if df is not None and not df.empty:
+                    # Cache to disk on success
+                    try:
+                        df.to_pickle(cache_path)
+                        print(f"   💾 Cached industry data ({date_str})")
+                    except Exception:
+                        pass
                     return df
             except Exception as e:
-                print(f"   ⚠️ stock_yjbb_em({date_str}) attempt {attempt+1} failed: {e}")
-                time.sleep(2)
+                sleep_time = BASE_DELAY * (2 ** attempt) + random.random() * 3
+                print(f"   ⚠️ stock_yjbb_em({date_str}) attempt {attempt+1}/{MAX_ATTEMPTS} failed: {e}")
+                if attempt < MAX_ATTEMPTS - 1:
+                    print(f"      Retrying in {sleep_time:.0f}s...")
+                    time.sleep(sleep_time)
+        # Pause before trying the next date
+        time.sleep(3)
+
     return pd.DataFrame()
 
 # --- Data Fetching ---
@@ -129,17 +159,20 @@ def fetch_basic_pool():
     
     # 3. Ultimate Fallback: Build pool from Industry data + Sina Daily bars
     #    Uses stock_zh_a_daily (Sina source), ALWAYS works even pre-market
+    # Pre-fetch industry data once (reused in fallback AND main path)
+    growth_df_cached = None
+
     if spot_df is None or spot_df.empty:
         print("🔄 Trying Sina Daily Bars fallback (always available)...")
         try:
             # Get industry/growth data first to know which stocks to fetch
-            growth_df = get_industry_data_robustly()
+            growth_df_cached = get_industry_data_robustly()
             
-            if '所处行业' not in growth_df.columns:
+            if '所处行业' not in growth_df_cached.columns:
                 print("❌ No industry data available")
                 return pd.DataFrame()
             
-            target_stocks = growth_df[growth_df['所处行业'].apply(
+            target_stocks = growth_df_cached[growth_df_cached['所处行业'].apply(
                 lambda x: isinstance(x, str) and any(t in x for t in TARGET_INDUSTRIES)
             )].copy()
             
@@ -220,7 +253,7 @@ def fetch_basic_pool():
         }
         
         print("Fetching Industry & Growth Data...")
-        growth_df = get_industry_data_robustly()
+        growth_df = growth_df_cached if growth_df_cached is not None else get_industry_data_robustly()
              
         if '所处行业' in growth_df.columns:
             growth_df = growth_df[['股票代码', '所处行业', '净利润-同比增长']]
