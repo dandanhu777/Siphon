@@ -727,7 +727,7 @@ def generate_report():
             logger.info(f"📧 Sending email (attempt {attempt+1}/3)...")
             smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=60)
             smtp.login(MAIL_USER, MAIL_PASS)
-            smtp.sendmail(MAIL_USER, MAIL_RECEIVERS, msg.as_string())
+            smtp.send_message(msg, from_addr=MAIL_USER, to_addrs=MAIL_RECEIVERS)
             smtp.quit()
             logger.info("✅ Report sent successfully.")
             print("✅ Report sent successfully.")
@@ -735,7 +735,9 @@ def generate_report():
         except Exception as e:
             logger.warning(f"Email attempt {attempt+1} failed: {e}")
             if attempt == 2:
-                print(f"❌ Email Error (all attempts failed): {e}")
+                import traceback
+                print(f"❌ Email Error (all attempts failed):")
+                traceback.print_exc()
             else:
                 time.sleep(2)  # Wait before retry
 
