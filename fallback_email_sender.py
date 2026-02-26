@@ -734,26 +734,45 @@ def generate_report():
     for attempt in range(3):
         try:
             logger.info(f"📧 Sending email (attempt {attempt+1}/3)...")
-            smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=60)
-            # Python 3.9 smtplib bug workaround: AUTH can fail with str+bytes error.
-            # Use manual AUTH LOGIN as fallback.
+            
+            # CRITICAL: Explicitly bypass proxy for SMTP to avoid Aliyun/GHA conflicts
+            original_http_proxy = os.environ.pop('http_proxy', None)
+            original_https_proxy = os.environ.pop('https_proxy', None)
+            original_HTTP_PROXY = os.environ.pop('HTTP_PROXY', None)
+            original_HTTPS_PROXY = os.environ.pop('HTTPS_PROXY', None)
+            
             try:
-                smtp.login(MAIL_USER, MAIL_PASS)
-            except TypeError:
-                logger.info("Using manual AUTH LOGIN workaround (Python 3.9 bug)...")
-                import base64
-                smtp.docmd("AUTH", "LOGIN " + base64.b64encode(MAIL_USER.encode()).decode())
-                smtp.docmd(base64.b64encode(MAIL_PASS.encode()).decode())
-            smtp.send_message(msg, from_addr=MAIL_USER, to_addrs=MAIL_RECEIVERS)
-            smtp.quit()
-            logger.info("✅ Report sent successfully.")
-            print("✅ Report sent successfully.")
-            break
+                smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=60)
+                # Python 3.9 smtplib bug workaround: AUTH can fail with str+bytes error.
+                # Use manual AUTH LOGIN as fallback.
+                try:
+                    smtp.login(MAIL_USER, MAIL_PASS)
+                except TypeError:
+                    logger.info("Using manual AUTH LOGIN workaround (Python 3.9 bug)...")
+                    import base64
+                    smtp.docmd("AUTH", "LOGIN " + base64.b64encode(MAIL_USER.encode()).decode())
+                    smtp.docmd(base64.b64encode(MAIL_PASS.encode()).decode())
+                smtp.send_message(msg, from_addr=MAIL_USER, to_addrs=MAIL_RECEIVERS)
+                smtp.quit()
+                logger.info("✅ Report sent successfully.")
+                print("✅ Report sent successfully.")
+                
+                # Restore proxies (though script is ending)
+                if original_http_proxy: os.environ['http_proxy'] = original_http_proxy
+                if original_https_proxy: os.environ['https_proxy'] = original_https_proxy
+                
+                break
+            except Exception as e_inner:
+                # Restore proxies on failure to allow next retry or other logic
+                if original_http_proxy: os.environ['http_proxy'] = original_http_proxy
+                if original_https_proxy: os.environ['https_proxy'] = original_https_proxy
+                raise e_inner
+
         except Exception as e:
             logger.warning(f"Email attempt {attempt+1} failed: {e}")
             if attempt == 2:
                 import traceback
-                print(f"❌ Email Error (all attempts failed):")
+                print(f"❌ Email Error (all attempts failed): {e}")
                 traceback.print_exc()
             else:
                 time.sleep(2)  # Wait before retry

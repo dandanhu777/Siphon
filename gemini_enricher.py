@@ -2,8 +2,8 @@ from openai import OpenAI
 import json
 import os
 
-# Config — v4.6: API Key from environment variable
-API_KEY = os.environ.get("GEMINI_API_KEY", "")
+# Config — v4.6: API Key from environment variable (LLM_API_KEY or GEMINI_API_KEY)
+API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
 ENDPOINTS = [
     "https://generativelanguage.googleapis.com/v1beta/openai", # Official Gemini API
 ]
