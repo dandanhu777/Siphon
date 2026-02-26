@@ -15,26 +15,33 @@ warnings.filterwarnings('ignore')
 
 # --- Header Spoofing for Akshare (Anti-Bot Bypass) ---
 import requests
-original_get = requests.get
-original_post = requests.post
+from requests.sessions import Session
 
-def spoofed_get(url, *args, **kwargs):
+original_request = Session.request
+
+def spoofed_request(self, method, url, *args, **kwargs):
     headers = kwargs.get('headers', {})
+    if not headers:
+        headers = {}
+    else:
+        headers = headers.copy()
+        
     if 'User-Agent' not in headers:
         headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    
+    # Also add standard browser headers to be more convincing
+    if 'Accept' not in headers:
+        headers['Accept'] = 'application/json, text/plain, */*'
+    if 'Accept-Language' not in headers:
+        headers['Accept-Language'] = 'zh-CN,zh;q=0.9,en;q=0.8'
+    
     kwargs['headers'] = headers
-    return original_get(url, *args, **kwargs)
+    return original_request(self, method, url, *args, **kwargs)
 
-def spoofed_post(url, *args, **kwargs):
-    headers = kwargs.get('headers', {})
-    if 'User-Agent' not in headers:
-        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    kwargs['headers'] = headers
-    return original_post(url, *args, **kwargs)
-
-# Monkeypatch requests to ensure all akshare calls use browser-like headers
-requests.get = spoofed_get
-requests.post = spoofed_post
+# Monkeypatch Session.request to catch all outbound requests via requests library
+Session.request = spoofed_request
+# Also patch the functional API as a fallback
+requests.api.request = spoofed_request
 
 # --- Configuration ---
 CACHE_DIR = "data_cache"
