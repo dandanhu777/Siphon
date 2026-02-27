@@ -163,14 +163,13 @@ def fetch_enhanced_tracking_data(industry_map={}):
             if d not in date_groups: date_groups[d] = []
             date_groups[d].append(r)
             
-        # 2. Filter Top 3
+        # 2. Filter Top 10 (Increased from 3 to show more history)
         filtered_rows = []
         for d in sorted(date_groups.keys(), reverse=True):
-             # They are already sorted by Score DESC in SQL
              day_picks = date_groups[d]
-             # KEEP TOP 3
-             top3 = day_picks[:3]
-             filtered_rows.extend(top3)
+             # KEEP TOP 10 per day to ensure history isn't "lost"
+             top10 = day_picks[:10]
+             filtered_rows.extend(top10)
         
         # 3. Proceed with existing logic using filtered_rows
         # Dedup Logic: Keep the OLDEST rec_date for each stock.
@@ -412,7 +411,7 @@ def generate_report():
 
     # Inject Runners Up into track_data (Limit to Top 3 Total = Rank 1 + Rank 2,3)
     t0_count = 0
-    MAX_T0_DISPLAY = 2 
+    MAX_T0_DISPLAY = 5 # Increased from 2 to show more new picks
     
     for row in others_today:
         if t0_count >= MAX_T0_DISPLAY: break
@@ -579,6 +578,7 @@ def generate_report():
                             <th style="{th_style} width:8%; text-align:center;">天数</th>
                             <th style="{th_style} width:10%; text-align:right;">买入/现价</th>
                             <th style="{th_style} width:9%; text-align:center;">收益</th>
+                            <th style="{th_style} width:11%; text-align:center;">策略标签</th>
                             <th style="{th_style} width:10%; text-align:center;">操作</th>
                             <th style="{th_style} width:9%; text-align:center;">极值</th>
                             <th style="{th_style} width:8%; text-align:center;">大盘</th>
@@ -608,6 +608,11 @@ def generate_report():
             track_html += f'<td style="{td_style} text-align:center; font-weight:bold; color:#64748b; font-size:12px; white-space: nowrap;">{item["t_str"]}</td>'
             track_html += f'<td style="{td_style} text-align:right; white-space: nowrap; font-size:11px;"><div style="color:#94a3b8;">{item["rec_price"]:.2f}</div><div style="font-weight:bold; color:#334155; font-size:14px;">{item["price"]:.2f}</div></td>'
             track_html += f'<td style="{td_style} text-align:center; font-weight:bold; font-size:14px; color:{ret_color}; white-space: nowrap;">{ret:+.2f}%</td>'
+            
+            # Strategy Tag - Small Badge (Full Tag)
+            strat_tag = item.get('strategy', 'Siphon')
+            track_html += f'<td style="{td_style} text-align:center;"><div style="font-size:10px; color:#6366f1; background:#f5f3ff; border-radius:3px; padding:2px 4px; border:1px solid #e0e7ff; line-height:1.2; white-space: normal; word-break: break-all;">{strat_tag}</div></td>'
+
             track_html += f'<td style="{td_style} text-align:center; white-space: nowrap;"><span style="background:{action_bg}; color:{action_fg}; padding:4px 8px; border-radius:4px; font-weight:800; font-size:12px; display:inline-block; min-width:50px;">{action_text}</span></td>' 
             track_html += f'<td style="{td_style} text-align:center; font-size:12px; white-space: nowrap;">{item["max_return"]}</td>'
 

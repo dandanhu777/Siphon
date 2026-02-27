@@ -1096,11 +1096,13 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
         results.append({
             'Symbol': symbol_str,
             'Name': name,
+            'Date': last_trading_date,
             'Industry': industry,
             'Price': float(current_price),
             'Change_Pct': change_pct,
             'AG_Score': composite,
-            'AG_Details': signal_str,
+            'Strategy': signal_str, # v10.1: Align with tracker
+            'Logic': signal_str,    # v10.1: Align with tracker
             'Volume_Note': vol_note,
             'RS_Score': micro_mom_score,
             'Vol_Explosion': vol_ratio,
