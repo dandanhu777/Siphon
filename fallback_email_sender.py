@@ -347,6 +347,17 @@ def fetch_enhanced_tracking_data(industry_map={}):
 # --- Generation Logic ---
 
 def generate_report():
+    # v10.2: Early exit if market is closed
+    try:
+        df_dates = ak.tool_trade_date_hist_sina()
+        if not df_dates.empty:
+            today = datetime.date.today()
+            if today not in df_dates['trade_date'].values:
+                print("⏸️ Market is CLOSED today. Skipping email report.")
+                return
+    except Exception as e:
+        print(f"⚠️ Holiday check error (Email Sender): {e}")
+
     if not os.path.exists(CSV_PATH): return
 
     # 1. Load Data

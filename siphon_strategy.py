@@ -57,6 +57,27 @@ class StrategyConfig:
 
 CONFIG = StrategyConfig()
 
+# --- v10.2: Market Holiday Check ---
+def is_trading_day():
+    """Check if today is a trading day in A-share market."""
+    try:
+        # Get trading dates from Sina (includes past and future)
+        df_dates = ak.tool_trade_date_hist_sina()
+        if df_dates.empty:
+            return True # Fallback to continue if API fails
+        
+        # Current date in Beijing Time (approximate for GHA which is UTC)
+        # GHA runs at 01:50 UTC (09:50 BEI) and 06:35 UTC (14:35 BEI)
+        # In both cases, UTC date is the same as BEI date.
+        today = datetime.date.today()
+        
+        # Check if today is in the trading calendar
+        is_trade = today in df_dates['trade_date'].values
+        return is_trade
+    except Exception as e:
+        print(f"⚠️ Holiday check error: {e}. Defaulting to TRADING DAY.")
+        return True
+
 # --- Utilities ---
 def retry(times=3, initial_delay=2):
     def decorator(func):
@@ -980,6 +1001,11 @@ def _save_and_report(results, csv_path, last_trading_date):
 
 def run_siphoner_strategy(market='CN', cfg=CONFIG):
     print(f"=== Starting 'Siphon Strategy v10.0 — Ultra-Short-Term Extreme Burst' (Market: {market}) ===")
+    
+    # v10.2: Early exit if market is closed
+    if not is_trading_day():
+        print("⏸️ Market is CLOSED today. Skipping strategy execution.")
+        return
     
     if market == 'CN':
         pool = fetch_basic_pool()
