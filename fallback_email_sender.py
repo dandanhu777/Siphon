@@ -163,13 +163,12 @@ def fetch_enhanced_tracking_data(industry_map={}):
             if d not in date_groups: date_groups[d] = []
             date_groups[d].append(r)
             
-        # 2. Filter Top 10 (Increased from 3 to show more history)
+        # 2. Filter Top 3 per day
         filtered_rows = []
         for d in sorted(date_groups.keys(), reverse=True):
              day_picks = date_groups[d]
-             # KEEP TOP 10 per day to ensure history isn't "lost"
-             top10 = day_picks[:10]
-             filtered_rows.extend(top10)
+             top3 = day_picks[:3]
+             filtered_rows.extend(top3)
         
         # 3. Proceed with existing logic using filtered_rows
         # Dedup Logic: Keep the OLDEST rec_date for each stock.
@@ -205,9 +204,9 @@ def fetch_enhanced_tracking_data(industry_map={}):
             if item['row'][3] < today_str and item['row'][3] >= cutoff_date
         ]
         
-        # Take all valid history items (reversed to show newest first)
-        target_items = history_candidates 
-        target_items.reverse()
+        # Take only the 3 most recent history items
+        history_candidates.reverse()
+        target_items = history_candidates[:3] 
         
         # Pre-fetch prices
         all_codes = [item['row'][0] for item in target_items]
@@ -411,7 +410,7 @@ def generate_report():
 
     # Inject Runners Up into track_data (Limit to Top 3 Total = Rank 1 + Rank 2,3)
     t0_count = 0
-    MAX_T0_DISPLAY = 5 # Increased from 2 to show more new picks
+    MAX_T0_DISPLAY = 2 # Reverted to 2 for conciseness
     
     for row in others_today:
         if t0_count >= MAX_T0_DISPLAY: break
