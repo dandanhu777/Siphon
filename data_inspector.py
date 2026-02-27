@@ -140,3 +140,8 @@ class DataInspector:
         else:
             print("✅ ALL CHECKS PASSED")
             return True
+
+
+if __name__ == "__main__":
+    inspector = DataInspector()
+    inspector.run_all_checks()
