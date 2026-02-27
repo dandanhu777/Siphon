@@ -204,9 +204,9 @@ def fetch_enhanced_tracking_data(industry_map={}):
             if item['row'][3] < today_str and item['row'][3] >= cutoff_date
         ]
         
-        # Take only the 3 most recent history items
+        # Take all valid history items (reversed to show newest first)
         history_candidates.reverse()
-        target_items = history_candidates[:3] 
+        target_items = history_candidates 
         
         # Pre-fetch prices
         all_codes = [item['row'][0] for item in target_items]
