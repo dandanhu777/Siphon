@@ -562,8 +562,16 @@ def generate_report():
              except Exception: pass
         if not ind: ind = "Unknown"
 
+        # v10.2 Superstar: Price < 50 and Score in sweet-spot Q2/Q3 (<= 56)
+        is_star = False
+        try:
+            if float(display_price) < 50 and float(row["AG_Score"]) <= 56:
+                is_star = True
+        except Exception: pass
+        star_badge = ' <span style="color:#f59e0b; font-weight:900; font-size:14px;">***</span>' if is_star else ''
+
         rec_html += f'<tr>'
-        rec_html += f'<td style="{td_style}"><a href="{link}" style="color:#0f172a; font-weight:bold; font-size:13px; text-decoration:none;">{row["Name"]}</a><br><span style="color:#64748b; font-size:10px;">{symbol}</span><br><span style="background:#eff6ff; color:#3b82f6; font-size:9px; padding:1px 3px; border-radius:3px;">{ind}</span></td>'
+        rec_html += f'<td style="{td_style}"><a href="{link}" style="color:#0f172a; font-weight:bold; font-size:13px; text-decoration:none;">{row["Name"]}{star_badge}</a><br><span style="color:#64748b; font-size:10px;">{symbol}</span><br><span style="background:#eff6ff; color:#3b82f6; font-size:9px; padding:1px 3px; border-radius:3px;">{ind}</span></td>'
         rec_html += f'<td style="{td_style}"><div style="color:#d97706; font-weight:800; font-size:14px;">{row["AG_Score"]}</div>{score_bar}</td>'
         rec_html += f'<td style="{td_style}"><div style="font-weight:600; color:#334155; font-size:12px;">¥{display_price:.2f}</div><div style="font-size:10px; color:#10b981; margin-top:1px;">🎯 {enrich.get("target_price","-")}</div></td>'
         rec_html += f'<td style="{td_style} font-size:11px; line-height:1.4; color:#475569;">{enrich.get("business","-")}</td>'
@@ -612,8 +620,16 @@ def generate_report():
 
             badge = f'<span style="font-size:9px; background:#e0f2fe; color:#0284c7; padding:1px 4px; border-radius:3px; margin-left:3px;">R{item["nth"]}</span>' if item['nth'] > 1 else ""
 
+            # v10.2 Superstar: Price < 50 and Score in sweet-spot Q2/Q3 (<= 56)
+            is_star = False
+            try:
+                if float(item["rec_price"]) < 50 and 0 < float(item.get("score", 0)) <= 56:
+                    is_star = True
+            except Exception: pass
+            star_badge = ' <span style="color:#f59e0b; font-weight:900; font-size:14px;">***</span>' if is_star else ''
+
             track_html += f'<tr>'
-            track_html += f'<td style="{td_style} white-space: nowrap;"><a href="{link}" style="text-decoration:none; color:#334155; font-weight:600; font-size:14px;">{item["name"]}</a> {badge}<br><span style="color:#94a3b8; font-size:11px;">{item["code"]}</span><br><span style="color:#64748b; font-size:10px;">{item.get("industry","-")}</span></td>'
+            track_html += f'<td style="{td_style} white-space: nowrap;"><a href="{link}" style="text-decoration:none; color:#334155; font-weight:600; font-size:14px;">{item["name"]}{star_badge}</a> {badge}<br><span style="color:#94a3b8; font-size:11px;">{item["code"]}</span><br><span style="color:#64748b; font-size:10px;">{item.get("industry","-")}</span></td>'
             track_html += f'<td style="{td_style} text-align:center; white-space: nowrap;"><div style="color:#d97706; font-weight:700; font-size:13px;">{item.get("score", "-")}</div></td>'
             track_html += f'<td style="{td_style} text-align:center; font-weight:bold; color:#64748b; font-size:12px; white-space: nowrap;">{item["t_str"]}</td>'
             track_html += f'<td style="{td_style} text-align:right; white-space: nowrap; font-size:11px;"><div style="color:#94a3b8;">{item["rec_price"]:.2f}</div><div style="font-weight:bold; color:#334155; font-size:14px;">{item["price"]:.2f}</div></td>'
@@ -750,7 +766,7 @@ def generate_report():
         try:
             logger.info(f"📧 Sending email (attempt {attempt+1}/3)...")
             
-            # CRITICAL: Explicitly bypass proxy for SMTP to avoid Aliyun/GHA conflicts
+            # CRITICAL: Explicitly bypass HTTP proxy for SMTP
             original_http_proxy = os.environ.pop('http_proxy', None)
             original_https_proxy = os.environ.pop('https_proxy', None)
             original_HTTP_PROXY = os.environ.pop('HTTP_PROXY', None)
@@ -760,7 +776,34 @@ def generate_report():
                 if not MAIL_USER or not MAIL_PASS:
                     raise ValueError("❌ Missing MAIL_USER or MAIL_PASS environment variables. Please set them in GitHub Secrets.")
 
+                # v10.3: Route SMTP via SOCKS5 proxy for Aliyun (GFW bypass)
+                # Monkey-patch socket globally so SMTP_SSL tunnels through Xray VMess
+                _socks_patched = False
+                _orig_socket = None
+                try:
+                    import socks
+                    import socket
+                    # Quick test: can we connect to the local SOCKS5 proxy?
+                    _test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    _test.settimeout(2)
+                    _test.connect(("127.0.0.1", 1080))
+                    _test.close()
+                    # Proxy is alive — monkey-patch
+                    _orig_socket = socket.socket
+                    socks.set_default_proxy(socks.SOCKS5, "127.0.0.1", 1080)
+                    socket.socket = socks.socksocket
+                    _socks_patched = True
+                    logger.info("📡 SMTP will tunnel via SOCKS5 proxy (Xray/VMess)")
+                except Exception as proxy_e:
+                    logger.info(f"ℹ️ SOCKS5 proxy not available ({proxy_e}), using direct SMTP")
+
                 smtp = smtplib.SMTP_SSL(MAIL_HOST, MAIL_PORT, timeout=60)
+
+                # Restore original socket immediately after connection
+                if _socks_patched and _orig_socket:
+                    import socket as _sock_mod
+                    _sock_mod.socket = _orig_socket
+                    socks.set_default_proxy()
                 # Python 3.9 smtplib bug workaround: AUTH can fail with str+bytes error.
                 # Use manual AUTH LOGIN as fallback.
                 try:
