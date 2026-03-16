@@ -1,7 +1,9 @@
 print("DEBUG: Script started...")
 import requests_patch
 import smtplib
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 from email.header import Header
 import pandas as pd
 import datetime
@@ -38,13 +40,9 @@ env_receivers_str = os.environ.get("MAIL_RECEIVERS_LIST")
 if env_receivers_str:
     MAIL_RECEIVERS = [x.strip() for x in env_receivers_str.split(",")]
 else:
-    # Merged fallback list from .env and code defaults
-    MAIL_RECEIVERS = [
-        "28595591@qq.com", "89299772@qq.com", "milsica@gmail.com", 
-        "tosinx@gmail.com", "874686267@qq.com", "zhengzheng.duan@kone.com", 
-        "8871802@qq.com", "171754089@qq.com", "840276240@qq.com", 
-        "525624506@qq.com", "gaoyi@mininggoat.com", "32598630@qq.com"
-    ]
+    # v11.0: No more hardcoded fallback — require MAIL_RECEIVERS_LIST env var
+    print("⚠️ MAIL_RECEIVERS_LIST not set in environment. Email will not be sent.")
+    MAIL_RECEIVERS = []
 
 CSV_PATH = "siphon_strategy_results.csv"
 
@@ -240,32 +238,36 @@ def fetch_enhanced_tracking_data(industry_map={}):
             days = (datetime.date.today() - datetime.datetime.strptime(rec_date_str, '%Y-%m-%d').date()).days
             
             # v6.0 FIX: Universal Price Correction for History
-            # Always try to verify Rec Price from history to ensure accuracy (e.g. checks against splits/bad DB data)
-            # Only skipping if T+0 (today)
+            # v11.0: Use KlineCache instead of direct API calls for price verification
             if days > 0:
                 verified_price = None
-                for _ in range(3): # Retry 3 times for flaky network
-                    try:
-                        # AkShare History (Sina Source) - More reliable
-                        # Range: RecDate - 10 days -> RecDate
-                        prefix = "sz" if code.startswith("0") or code.startswith("3") else "sh"
-                        long_code = prefix + code
-                        rec_dt = datetime.datetime.strptime(rec_date_str, "%Y-%m-%d")
-                        s_str = (rec_dt - datetime.timedelta(days=10)).strftime("%Y%m%d")
-                        e_str = rec_dt.strftime("%Y%m%d")
-                        
-                        df_hist = ak.stock_zh_a_daily(symbol=long_code, start_date=s_str, end_date=e_str, adjust="qfq")
-                        
-                        if not df_hist.empty:
-                            verified_price = float(df_hist.iloc[-1]['close'])
-                            break
-                    except Exception:
-                        time.sleep(1)
-                
+
+                # Try KlineCache first (fast, no API call)
+                if kline_cache:
+                    verified_price = kline_cache.get_verified_price(code, rec_date_str)
+
+                # Fallback to API only if cache miss
+                if verified_price is None:
+                    for _ in range(2):  # Reduced retries since cache handles most cases
+                        try:
+                            prefix = "sz" if code.startswith("0") or code.startswith("3") else "sh"
+                            if code.startswith("4") or code.startswith("8"):
+                                prefix = "bj"
+                            long_code = prefix + code
+                            rec_dt = datetime.datetime.strptime(rec_date_str, "%Y-%m-%d")
+                            s_str = (rec_dt - datetime.timedelta(days=10)).strftime("%Y%m%d")
+                            e_str = rec_dt.strftime("%Y%m%d")
+
+                            df_hist = ak.stock_zh_a_daily(symbol=long_code, start_date=s_str, end_date=e_str, adjust="qfq")
+
+                            if not df_hist.empty:
+                                verified_price = float(df_hist.iloc[-1]['close'])
+                                break
+                        except Exception:
+                            time.sleep(1)
+
                 if verified_price is not None:
-                    # Update if different
                      if abs(verified_price - rec_price) > 0.01:
-                         # print(f"   [v6.0 Fix] {code} RecPrice {rec_price} -> {verified_price}")
                          rec_price = verified_price
 
             stock_ret = ((curr_price - rec_price) / rec_price) * 100
@@ -277,22 +279,15 @@ def fetch_enhanced_tracking_data(industry_map={}):
             # v4.6 FIX: Replace "Missing API Key" message
             final_logic = db_core_logic if db_core_logic else strategy_tag
             if "Unavailable" in str(final_logic) or "Missing API Key" in str(final_logic):
-                 # Try simple Fallback logic (Industry)
-                 final_logic = "Unknown sector placeholder" # Default
+                 final_logic = "Unknown sector placeholder"
                  try:
-                     # Deterministic lookup (Lightweight)
-                     # We can't import gemini_enricher here easily without circular dep, 
-                     # so strictly use EM/CNINFO inline or simple placeholder to 'repair' display
                      import akshare as aks
-                     try:
-                         # Try CNINFO
-                         df_info = aks.stock_profile_cninfo(symbol=code)
-                         if not df_info.empty:
-                             bus = df_info.iloc[0].get('主营业务')
-                             if bus: final_logic = bus[:50] + "..."
-                     except Exception:
-                        pass
-                 except Exception: pass
+                     df_info = aks.stock_profile_cninfo(symbol=code)
+                     if not df_info.empty:
+                         bus = df_info.iloc[0].get('主营业务')
+                         if bus: final_logic = bus[:50] + "..."
+                 except Exception as e:
+                     logging.debug(f"Fallback logic lookup failed for {code}: {e}")
 
             # v9.0: Calculate Max Return Since Recommendation (using KlineCache)
             max_ret_str = "-"
@@ -417,7 +412,8 @@ def generate_report():
             
     # Force Update Index Cache for T+0 Data
     try: update_index_cache()
-    except Exception: pass
+    except Exception as e:
+        logging.warning(f"Index cache update failed: {e}")
 
     # Inject Runners Up into track_data (Limit to Top 3 Total = Rank 1 + Rank 2,3)
     t0_count = 0
@@ -559,7 +555,7 @@ def generate_report():
                  df_info = aks.stock_profile_cninfo(symbol=symbol) # symbol is 6-digit code
                  if not df_info.empty:
                      ind = df_info.iloc[0].get('行业')
-             except Exception: pass
+             except Exception: ind = "Unknown"
         if not ind: ind = "Unknown"
 
         # v10.2 Superstar: Price < 50 and Score in sweet-spot Q2/Q3 (<= 56)
@@ -567,11 +563,17 @@ def generate_report():
         try:
             if float(display_price) < 50 and float(row["AG_Score"]) <= 56:
                 is_star = True
-        except Exception: pass
+        except (ValueError, TypeError, KeyError): pass
         star_badge = ' <span style="color:#f59e0b; font-weight:900; font-size:14px;">***</span>' if is_star else ''
 
+        # v11.0: Confidence grade badge
+        grade = row.get("Grade", "")
+        grade_colors = {'S': ('#ef4444', '#fff'), 'A': ('#f59e0b', '#fff'), 'B': ('#3b82f6', '#fff'), 'C': ('#94a3b8', '#fff')}
+        gc, gfc = grade_colors.get(grade, ('#94a3b8', '#fff'))
+        grade_badge = f' <span style="background:{gc}; color:{gfc}; font-size:9px; font-weight:700; padding:1px 4px; border-radius:3px; margin-left:3px;">{grade}</span>' if grade else ''
+
         rec_html += f'<tr>'
-        rec_html += f'<td style="{td_style}"><a href="{link}" style="color:#0f172a; font-weight:bold; font-size:13px; text-decoration:none;">{row["Name"]}{star_badge}</a><br><span style="color:#64748b; font-size:10px;">{symbol}</span><br><span style="background:#eff6ff; color:#3b82f6; font-size:9px; padding:1px 3px; border-radius:3px;">{ind}</span></td>'
+        rec_html += f'<td style="{td_style}"><a href="{link}" style="color:#0f172a; font-weight:bold; font-size:13px; text-decoration:none;">{row["Name"]}{star_badge}{grade_badge}</a><br><span style="color:#64748b; font-size:10px;">{symbol}</span><br><span style="background:#eff6ff; color:#3b82f6; font-size:9px; padding:1px 3px; border-radius:3px;">{ind}</span></td>'
         rec_html += f'<td style="{td_style}"><div style="color:#d97706; font-weight:800; font-size:14px;">{row["AG_Score"]}</div>{score_bar}</td>'
         rec_html += f'<td style="{td_style}"><div style="font-weight:600; color:#334155; font-size:12px;">¥{display_price:.2f}</div><div style="font-size:10px; color:#10b981; margin-top:1px;">🎯 {enrich.get("target_price","-")}</div></td>'
         rec_html += f'<td style="{td_style} font-size:11px; line-height:1.4; color:#475569;">{enrich.get("business","-")}</td>'
@@ -625,7 +627,7 @@ def generate_report():
             try:
                 if float(item["rec_price"]) < 50 and 0 < float(item.get("score", 0)) <= 56:
                     is_star = True
-            except Exception: pass
+            except (ValueError, TypeError, KeyError): pass
             star_badge = ' <span style="color:#f59e0b; font-weight:900; font-size:14px;">***</span>' if is_star else ''
 
             track_html += f'<tr>'
@@ -650,7 +652,7 @@ def generate_report():
     full_html = f"""
     <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 720px; margin: 0 auto; color: #1e293b; background: #ffffff;">
     <div style="text-align:center; padding: 25px 0;">
-            <div style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">短线虹吸精选 (v10.1.0)</div>
+            <div style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">短线虹吸精选 (v10.2)</div>
             <div style="font-size:13px; color:#64748b; margin-top:6px;">{current_time}</div>
         </div>
         
@@ -717,7 +719,7 @@ def generate_report():
 
         <!-- Scoring Logic Appendix (Chinese) -->
         <div style="margin: 25px 0; border-top: 1px solid #f1f5f9; padding-top: 15px;">
-            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase;">逻辑技术附录: V10.0 打板极爆版 (满分 100) | 10:00探索 & 14:40定版</div>
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase;">逻辑技术附录: V10.2 打板极爆版 (满分 100) | 10:00探索 & 14:40定版</div>
             <div style="font-size: 10px; color: #64748b; line-height: 1.5; font-family: Consolas, Monaco, monospace; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
                     <span><strong>1. 资金爆破模块 (40分)</strong></span>
@@ -756,11 +758,71 @@ def generate_report():
         </div>
     </div>
     """
-    msg = MIMEText(full_html, 'html', 'utf-8')
+    msg = MIMEMultipart()
     msg['From'] = Header("AI 参谋部", 'utf-8')
     msg['To'] = Header("Commander", 'utf-8')
     today_date = datetime.date.today().strftime("%m/%d")
-    msg['Subject'] = Header(f"✨ 短线虹吸精选 v10.1.0: 深度研报 ({today_date})", 'utf-8')
+    msg['Subject'] = Header(f"✨ 短线虹吸精选 v10.2: 深度研报 ({today_date})", 'utf-8')
+    
+    msg.attach(MIMEText(full_html, 'html', 'utf-8'))
+    
+    # --- Generate Extra HTML attachment for ALL stocks ---
+    # The user wants ALL recommended stocks for the day in the attachment
+    if candidates:
+        extra_html = "<html><head><meta charset='utf-8'><title>所有推荐标的 (v10.2)</title><style>body{font-family: -apple-system, sans-serif; padding: 20px;} table{border-collapse: collapse; width: 100%; max-width: 800px; margin: 0 auto; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);} th, td{border: 1px solid #e2e8f0; padding: 10px; text-align: center;} th{background-color: #f8fafc; font-weight: 600; color: #64748b;} td{color: #334155;}</style></head><body>"
+        # Changed table-layout to fixed to properly enforce widths, avoiding strategy col blowing up
+        extra_html += "<table style='table-layout: fixed; word-wrap: break-word;'><thead><tr><th style='width:12%;'>代码</th><th style='width:14%;'>名称</th><th style='width:12%;'>行业</th><th style='width:8%;'>分数</th><th style='width:11%;'>价格</th><th style='width:35%;'>策略标签</th><th style='width:8%;'>雷达数</th></tr></thead><tbody>"
+        
+        extra_list = []
+        for row in candidates:
+            row_dict = dict(row)
+            symbol = str(row_dict.get("Symbol", "")).zfill(6)
+            ind = row_dict.get("Industry", "-")
+            if not ind or ind == "Unknown" or ind == "-":
+                try:
+                    import akshare as aks
+                    df_info = aks.stock_profile_cninfo(symbol=symbol)
+                    if not df_info.empty:
+                        ind = df_info.iloc[0].get('行业', 'Unknown')
+                except Exception:
+                    ind = "Unknown"
+            if not ind: ind = "Unknown"
+            row_dict["Industry_Clean"] = ind
+            extra_list.append(row_dict)
+            
+        ind_counts = {}
+        for r in extra_list:
+            ind = r.get("Industry_Clean", "Unknown")
+            ind_counts[ind] = ind_counts.get(ind, 0) + 1
+            
+        extra_list_sorted = sorted(extra_list, key=lambda x: (-ind_counts.get(x.get("Industry_Clean", "Unknown"), 0), x.get("Industry_Clean", "Unknown"), -float(x.get("AG_Score", 0))))
+        
+        seen_inds = set()
+        for r in extra_list_sorted:
+            symbol = str(r.get("Symbol", "")).zfill(6)
+            ind = r.get("Industry_Clean", "Unknown")
+            cnt = ind_counts.get(ind, 0)
+            score = r.get("AG_Score", 0)
+            price = r.get("Price", 0)
+            strat = r.get("Strategy", "Siphon")
+            hq_prefix = "sh" if symbol.startswith("6") else "bj" if symbol.startswith(("8", "4")) else "sz"
+            em_url = f"https://quote.eastmoney.com/{hq_prefix}{symbol}.html"
+            symbol_link = f"<div style='white-space:nowrap;'><a href='{em_url}' target='_blank' style='color:#3b82f6; text-decoration:none; font-weight:600;'>{symbol}</a></div>"
+            name_link = f"<a href='{em_url}' target='_blank' style='color:#334155; text-decoration:none; white-space:nowrap;'>{r.get('Name','')}</a>"
+            strat_badge = f"<div style='background:#f5f3ff; color:#6366f1; padding:4px 6px; border-radius:4px; font-size:11px; border:1px solid #e0e7ff; text-align:left; line-height:1.4;'>{strat}</div>"
+            
+            cnt_td = ""
+            if ind not in seen_inds:
+                cnt_td = f"<td rowspan='{cnt}' style='vertical-align:middle; font-weight:bold; color:#475569; background-color:#f8fafc;'>{cnt}</td>"
+                seen_inds.add(ind)
+                
+            extra_html += f"<tr><td>{symbol_link}</td><td>{name_link}</td><td><span style='background:#eff6ff; color:#3b82f6; padding:2px 4px; border-radius:4px; font-size:12px; white-space:nowrap;'>{ind}</span></td><td style='color:#d97706; font-weight:bold;'>{score}</td><td>¥{price}</td><td>{strat_badge}</td>{cnt_td}</tr>"
+            
+        extra_html += "</tbody></table></body></html>"
+        
+        attachment = MIMEApplication(extra_html.encode('utf-8'))
+        attachment.add_header('Content-Disposition', 'attachment', filename=f'extra_stocks_{today_date.replace("/","-")}.html')
+        msg.attach(attachment)
     # v7.0.1: Add retry logic for SSL errors
     for attempt in range(3):
         try:
@@ -786,11 +848,11 @@ def generate_report():
                     # Quick test: can we connect to the local SOCKS5 proxy?
                     _test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     _test.settimeout(2)
-                    _test.connect(("127.0.0.1", 1080))
+                    _test.connect(("127.0.0.1", 7897))
                     _test.close()
                     # Proxy is alive — monkey-patch
                     _orig_socket = socket.socket
-                    socks.set_default_proxy(socks.SOCKS5, "127.0.0.1", 1080)
+                    socks.set_default_proxy(socks.SOCKS5, "127.0.0.1", 7897)
                     socket.socket = socks.socksocket
                     _socks_patched = True
                     logger.info("📡 SMTP will tunnel via SOCKS5 proxy (Xray/VMess)")
