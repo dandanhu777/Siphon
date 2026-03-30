@@ -687,7 +687,7 @@ def generate_report():
     full_html = f"""
     <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 720px; margin: 0 auto; color: #1e293b; background: #ffffff;">
     <div style="text-align:center; padding: 25px 0;">
-            <div style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">短线虹吸精选 (v12.0)</div>
+            <div style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">短线虹吸精选 (v12.8)</div>
             <div style="font-size:13px; color:#64748b; margin-top:6px;">{current_time}</div>
             <div style="margin-top:8px;">
                 <span style="background:{regime_color}; color:white; padding:3px 10px; border-radius:12px; font-size:11px; font-weight:700;">
@@ -698,25 +698,41 @@ def generate_report():
         
         <div style="background: linear-gradient(to bottom right, #f8fafc, #ffffff); border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0; box-shadow: 0 4px 6px -2px rgba(0,0,0,0.03);">
             <div style="font-weight: 700; color: #334155; font-size: 15px; display: flex; align-items: center; margin-bottom: 20px;">
-                <span style="background:#dbeafe; width:8px; height:8px; border-radius:50%; margin-right:8px;"></span> 策略核心进入机制 (V10.0 极爆打板版)
+                <span style="background:#dbeafe; width:8px; height:8px; border-radius:50%; margin-right:8px;"></span> 策略核心进入机制 (V12.8 多因子自适应架构)
             </div>
             
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; font-size: 12px; color: #475569; line-height: 1.6;">
                 <div>
-                    <div style="color:#0ea5e9; font-weight:700; margin-bottom:6px;">1. 资金突袭 (Burst)</div>
-                    <div>量能爆发。量比必须大于2.5且收盘逼近全天最高点，或呈现<span style="background:#e0f2fe; color:#0284c7; padding:0 3px;">巨量口袋支点</span>。</div>
+                    <div style="color:#0ea5e9; font-weight:700; margin-bottom:6px;">1. 资金突袭 (Burst) [40分]</div>
+                    <div>量价共振识别：量比≥2x且<span style="background:#e0f2fe; color:#0284c7; padding:0 3px;">光头阳线</span>确认主力意图，叠加巨量口袋支点判断。热门板块加成。</div>
                 </div>
                 <div>
-                     <div style="color:#f59e0b; font-weight:700; margin-bottom:6px;">2. 微观动量 (Micro-Mom)</div>
-                     <div>剥离所有长线慢牛。只看最近 3 天到 5 天的绝对超额Alpha，短线<span style="background:#fef3c7; color:#b45309; padding:0 3px;">越强越买</span>。</div>
+                     <div style="color:#f59e0b; font-weight:700; margin-bottom:6px;">2. 微观动量 (Micro-Mom) [25分]</div>
+                     <div>3日/5日<span style="background:#fef3c7; color:#b45309; padding:0 3px;">相对Alpha</span>连击。剥离大盘Beta，只捕捉纯个股超额，加速上攻优先。</div>
                 </div>
                 <div>
-                     <div style="color:#10b981; font-weight:700; margin-bottom:6px;">3. 逆势金身 (Antigravity)</div>
-                     <div>在大盘分时跳水时绝对横盘，具有极强的<span style="background:#f0fdf4; color:#047857; padding:0 3px;">避险属性</span>和主力绝对控盘。</div>
+                     <div style="color:#10b981; font-weight:700; margin-bottom:6px;">3. 逆势金身 (Antigravity) [20分]</div>
+                     <div>大盘下跌日<span style="background:#f0fdf4; color:#047857; padding:0 3px;">连续逆势横盘</span>，主力绝对控盘信号。连续抗跌额外加分。</div>
                 </div>
                 <div>
-                     <div style="color:#8b5cf6; font-weight:700; margin-bottom:6px;">4. 缩量老鸭头 (VCP)</div>
-                     <div><span style="background:#f3e8ff; padding:2px 4px; border-radius:3px;">极致地量</span>加上爆量反转。意味着洗盘结束，即将无阻力拉升。</div>
+                     <div style="color:#8b5cf6; font-weight:700; margin-bottom:6px;">4. 缩量老鸭头 (VCP) [15分]</div>
+                     <div>极致<span style="background:#f3e8ff; padding:2px 4px; border-radius:3px;">地量缩量</span>后爆量反转，洗盘结束拉升信号。</div>
+                </div>
+                <div>
+                     <div style="color:#6366f1; font-weight:700; margin-bottom:6px;">5. 深度因子 (Deep) [15分] 🆕</div>
+                     <div>残差动量 + 特质波动率(IVOL) + 封板强度 + 尾盘异动，捕捉主力隐蔽动作。</div>
+                </div>
+                <div>
+                     <div style="color:#06b6d4; font-weight:700; margin-bottom:6px;">6. VWAP位置 (VWAP) [5分] 🆕</div>
+                     <div>价格在VWAP上方=多头控盘加分。下方则降低信心。</div>
+                </div>
+                <div>
+                     <div style="color:#ec4899; font-weight:700; margin-bottom:6px;">7. ATR市场感知 (Regime) 🆕</div>
+                     <div>平静/波动/恐慌三档自适应：<span style="background:#fce7f3; color:#be185d; padding:0 3px;">波动期收紧阈值1.3x</span>，恐慌期收紧1.6x。</div>
+                </div>
+                <div>
+                     <div style="color:#f97316; font-weight:700; margin-bottom:6px;">8. 反转扫描 (Reversal) 🆕</div>
+                     <div>独立扫描超跌反弹标的，发出「反转观察」级别信号，与主策略互补。</div>
                 </div>
             </div>
         </div>
@@ -764,37 +780,41 @@ def generate_report():
         {decay_html}
 
 
-        <!-- Scoring Logic Appendix v12.0 -->
+        <!-- Scoring Logic Appendix v12.8 -->
         <div style="margin: 25px 0; border-top: 1px solid #f1f5f9; padding-top: 15px;">
-            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase;">评分引擎 V12.0 (满分100) | 动量+深度因子+VWAP</div>
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase;">评分引擎 V12.8 (满分100) | 多因子自适应 + 深度因子 + VWAP</div>
             <div style="font-size: 10px; color: #64748b; line-height: 1.5; font-family: Consolas, Monaco, monospace; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span><strong>1. 资金爆破 (32分)</strong></span>
-                    <span>量价共振: 爆量+光头阳线</span>
+                    <span><strong>1. 资金爆破 (32分 → 80分池)</strong></span>
+                    <span>量价共振: 爆量+光头阳线+口袋支点</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span><strong>2. 微观动量 (20分)</strong></span>
-                    <span>3日/5日Alpha连击</span>
+                    <span><strong>2. 微观动量 (20分 → 80分池)</strong></span>
+                    <span>3日/5日Alpha连击 (剥离Beta)</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span><strong>3. 逆势抗跌 (16分)</strong></span>
-                    <span>大盘跌时的金身防御表现</span>
+                    <span><strong>3. 逆势抗跌 (16分 → 80分池)</strong></span>
+                    <span>大盘跌时的金身防御+连续奖励</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span><strong>4. 老鸭头VCP (12分)</strong></span>
-                    <span>缩量起爆点</span>
+                    <span><strong>4. 老鸭头VCP (12分 → 80分池)</strong></span>
+                    <span>地量+爆量起爆点</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span style="color:#6366f1;"><strong>5. 深度因子 (15分) NEW</strong></span>
+                    <span style="color:#6366f1;"><strong>5. 深度因子 (15分) 🆕</strong></span>
                     <span style="color:#6366f1;">残差动量+IVOL+封板强度+尾盘异动</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span style="color:#0ea5e9;"><strong>6. VWAP位置 (5分) NEW</strong></span>
+                    <span style="color:#0ea5e9;"><strong>6. VWAP位置 (5分) 🆕</strong></span>
                     <span style="color:#0ea5e9;">价格在VWAP上方=强势加分</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <span style="color:#f59e0b;"><strong>市场自适应:</strong></span>
+                    <span style="color:#f59e0b;"><strong>市场自适应 (ATR Regime):</strong></span>
                     <span style="color:#f59e0b;">ATR {regime_label}状态 → 阈值x{regime_sensor.get_threshold_mult():.1f} 权重自动调整</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span style="color:#ec4899;"><strong>拥挤度/反转:</strong></span>
+                    <span style="color:#ec4899;">高相关股降分 | 超跌反弹独立扫描</span>
                 </div>
             </div>
         </div>
@@ -817,7 +837,7 @@ def generate_report():
     msg['From'] = Header("AI 参谋部", 'utf-8')
     msg['To'] = Header("Commander", 'utf-8')
     today_date = datetime.date.today().strftime("%m/%d")
-    msg['Subject'] = Header(f"短线虹吸精选 v12.0: 深度研报 ({today_date}) [{regime_label}]", 'utf-8')
+    msg['Subject'] = Header(f"短线虹吸精选 v12.8: 深度研报 ({today_date}) [{regime_label}]", 'utf-8')
     
     msg.attach(MIMEText(full_html, 'html', 'utf-8'))
     

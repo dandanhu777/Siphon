@@ -606,7 +606,8 @@ def fetch_index_data(symbol="sh000300", days=60):
         if 'date' not in df.columns:
             df = df.reset_index()
         
-        col_map = {'日期': 'date', '收盘': 'close', '收盘价': 'close'}
+        col_map = {'日期': 'date', '收盘': 'close', '收盘价': 'close',
+                   '最高': 'high', '最低': 'low', '开盘': 'open'}
         df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
         
         if 'date' not in df.columns:
@@ -618,7 +619,12 @@ def fetch_index_data(symbol="sh000300", days=60):
         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
         df['close'] = pd.to_numeric(df['close'])
         df['Index_Change'] = df['close'].pct_change() * 100
-        return df[['date', 'close', 'Index_Change']].reset_index(drop=True)
+        out_cols = ['date', 'close', 'Index_Change']
+        for c in ['high', 'low', 'open']:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors='coerce')
+                out_cols.append(c)
+        return df[out_cols].reset_index(drop=True)
     except Exception as e:
         print(f"Error fetching index: {e}")
         return pd.DataFrame()
@@ -1121,7 +1127,12 @@ def fetch_hk_index_data(symbol="HSI", days=60):
          df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
          df['close'] = pd.to_numeric(df['close'])
          df['Index_Change'] = df['close'].pct_change() * 100
-         return df[['date', 'close', 'Index_Change']].reset_index(drop=True)
+         out_cols = ['date', 'close', 'Index_Change']
+         for c in ['high', 'low', 'open']:
+             if c in df.columns:
+                 df[c] = pd.to_numeric(df[c], errors='coerce')
+                 out_cols.append(c)
+         return df[out_cols].reset_index(drop=True)
     except Exception as e:
         print(f"Error fetching HK index: {e}")
         return pd.DataFrame()
