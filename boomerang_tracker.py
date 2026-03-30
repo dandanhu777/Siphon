@@ -7,10 +7,14 @@ import sqlite3
 import datetime
 import pandas as pd
 from typing import Optional, Dict, List
+from contextlib import contextmanager
 import os
 import akshare as ak
 import pickle
 import time
+import logging
+
+logger = logging.getLogger("SiphonSystem")
 
 # v10.1.1: Fix Python 3.12+ sqlite3 DeprecationWarning for date adapters
 def _register_sqlite_fix():
@@ -23,6 +27,24 @@ _register_sqlite_fix()
 # Database path
 DB_PATH = "boomerang_tracker.db"
 
+# v11.0: Track whether init has been performed this session
+_db_initialized = False
+
+
+@contextmanager
+def get_db_connection():
+    """v11.0: Context manager for database connections.
+    Ensures connections are properly closed even on exceptions."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
 def fetch_index_data(symbol="sh000001", days=60):
     """Fetch market index data (Shanghai Composite)"""
     cache_file = f"data_cache/index_{symbol}.pkl"
@@ -34,7 +56,8 @@ def fetch_index_data(symbol="sh000001", days=60):
             try:
                 with open(cache_file, 'rb') as f:
                     return pickle.load(f)
-            except: pass
+            except Exception as e:
+                    logger.debug(f"Cache load failed for {cache_file}: {e}")
             
     # Fetch fresh data
     try:
@@ -98,61 +121,66 @@ def attach_market_performance(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def init_database():
-    """Initialize the tracking database with required tables"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Recommendations table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS recommendations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            stock_code TEXT NOT NULL,
-            stock_name TEXT NOT NULL,
-            rec_date TEXT NOT NULL,
-            rec_price REAL NOT NULL,
-            strategy_tag TEXT,
-            siphon_score REAL DEFAULT 0,
-            industry TEXT DEFAULT '',
-            core_logic TEXT DEFAULT '',
-            status TEXT DEFAULT 'Active',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Migrate existing DBs: add columns if missing
-    try:
-        cursor.execute("SELECT siphon_score FROM recommendations LIMIT 1")
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE recommendations ADD COLUMN siphon_score REAL DEFAULT 0")
-    try:
-        cursor.execute("SELECT industry FROM recommendations LIMIT 1")
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE recommendations ADD COLUMN industry TEXT DEFAULT ''")
-    try:
-        cursor.execute("SELECT core_logic FROM recommendations LIMIT 1")
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE recommendations ADD COLUMN core_logic TEXT DEFAULT ''")
-    
-    # Daily performance tracking table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS daily_performance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rec_id INTEGER NOT NULL,
-            trade_date TEXT NOT NULL,
-            close_price REAL NOT NULL,
-            daily_change_pct REAL,
-            cumulative_return REAL,
-            max_drawdown REAL,
-            max_high REAL,
-            relative_strength REAL,
-            FOREIGN KEY (rec_id) REFERENCES recommendations(id),
-            UNIQUE(rec_id, trade_date)
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
-    print("✅ Boomerang database initialized")
+    """Initialize the tracking database with required tables.
+    v11.0: Safe to call multiple times; skips if already initialized."""
+    global _db_initialized
+    if _db_initialized:
+        return
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # Recommendations table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS recommendations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stock_code TEXT NOT NULL,
+                stock_name TEXT NOT NULL,
+                rec_date TEXT NOT NULL,
+                rec_price REAL NOT NULL,
+                strategy_tag TEXT,
+                siphon_score REAL DEFAULT 0,
+                industry TEXT DEFAULT '',
+                core_logic TEXT DEFAULT '',
+                status TEXT DEFAULT 'Active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Migrate existing DBs: add columns if missing
+        try:
+            cursor.execute("SELECT siphon_score FROM recommendations LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE recommendations ADD COLUMN siphon_score REAL DEFAULT 0")
+        try:
+            cursor.execute("SELECT industry FROM recommendations LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE recommendations ADD COLUMN industry TEXT DEFAULT ''")
+        try:
+            cursor.execute("SELECT core_logic FROM recommendations LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE recommendations ADD COLUMN core_logic TEXT DEFAULT ''")
+
+        # Daily performance tracking table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS daily_performance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rec_id INTEGER NOT NULL,
+                trade_date TEXT NOT NULL,
+                close_price REAL NOT NULL,
+                daily_change_pct REAL,
+                cumulative_return REAL,
+                max_drawdown REAL,
+                max_high REAL,
+                relative_strength REAL,
+                FOREIGN KEY (rec_id) REFERENCES recommendations(id),
+                UNIQUE(rec_id, trade_date)
+            )
+        """)
+
+    # commit/close handled by context manager
+    _db_initialized = True
+    logger.info("Boomerang database initialized")
 
 def add_recommendation(stock_code: str, stock_name: str, rec_price: float, strategy_tag: str = "", siphon_score: float = 3.0, industry: str = "", core_logic: str = "", custom_date=None) -> int:
     """
@@ -161,9 +189,8 @@ def add_recommendation(stock_code: str, stock_name: str, rec_price: float, strat
         custom_date: Optional date string (YYYY-MM-DD) or datetime.date to use instead of today
     Returns: recommendation ID
     """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
+    _ensure_db()
+
     if custom_date is not None:
         if isinstance(custom_date, str):
             rec_date = custom_date
@@ -171,116 +198,102 @@ def add_recommendation(stock_code: str, stock_name: str, rec_price: float, strat
             rec_date = custom_date.strftime('%Y-%m-%d') if hasattr(custom_date, 'strftime') else str(custom_date)
     else:
         rec_date = datetime.date.today().strftime('%Y-%m-%d')
-    
-    # Check if already tracked on this date
-    cursor.execute("""
-        SELECT id FROM recommendations 
-        WHERE stock_code = ? AND rec_date = ?
-    """, (stock_code, rec_date))
-    existing = cursor.fetchone()
-    
-    if existing:
-        # v4.4 Fix: Update enriched data
-        rec_id = existing[0]
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # Check if already tracked on this date
         cursor.execute("""
-            UPDATE recommendations 
-            SET siphon_score = ?, rec_price = ?, strategy_tag = ?, industry = ?, core_logic = ?
-            WHERE id = ?
-        """, (siphon_score, rec_price, strategy_tag, industry, core_logic, rec_id))
-        conn.commit()
-        conn.close()
-        print(f"🔄 Updated Tracking: {stock_name} ({stock_code}) | Score: {siphon_score}")
+            SELECT id FROM recommendations
+            WHERE stock_code = ? AND rec_date = ?
+        """, (stock_code, rec_date))
+        existing = cursor.fetchone()
+
+        if existing:
+            rec_id = existing[0]
+            cursor.execute("""
+                UPDATE recommendations
+                SET siphon_score = ?, rec_price = ?, strategy_tag = ?, industry = ?, core_logic = ?
+                WHERE id = ?
+            """, (siphon_score, rec_price, strategy_tag, industry, core_logic, rec_id))
+            logger.info(f"Updated Tracking: {stock_name} ({stock_code}) | Score: {siphon_score}")
+            return rec_id
+
+        cursor.execute("""
+            INSERT INTO recommendations (stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic))
+
+        rec_id = cursor.lastrowid
+        logger.info(f"Tracking: {stock_name} ({stock_code}) @ ¥{rec_price:.2f} | Tag: {strategy_tag} | Score: {siphon_score}")
         return rec_id
-        
-    cursor.execute("""
-        INSERT INTO recommendations (stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic))
-    
-    rec_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    
-    print(f"📊 Tracking: {stock_name} ({stock_code}) @ ¥{rec_price:.2f} | Tag: {strategy_tag} | Score: {siphon_score}")
-    return rec_id
 
 def update_daily_performance(stock_data_fetcher):
     """
     Update daily performance for all active recommendations
     stock_data_fetcher: function that takes stock_code and returns current price data
     """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Get all active recommendations
-    cursor.execute("""
-        SELECT id, stock_code, stock_name, rec_date, rec_price 
-        FROM recommendations 
-        WHERE status = 'Active'
-    """)
-    
-    active_recs = cursor.fetchall()
-    today = datetime.date.today()
-    
-    for rec_id, stock_code, stock_name, rec_date_str, rec_price in active_recs:
-        rec_date = datetime.datetime.strptime(rec_date_str, '%Y-%m-%d').date()
-        days_tracked = (today - rec_date).days
-        
-        # Auto-close after 10 trading days (roughly 14 calendar days)
-        if days_tracked > 14:
-            cursor.execute("UPDATE recommendations SET status = 'Closed' WHERE id = ?", (rec_id,))
-            print(f"🔒 Closed tracking: {stock_name} (T+{days_tracked})")
-            continue
-        
-        # Fetch current price
-        try:
-            current_data = stock_data_fetcher(stock_code)
-            if not current_data:
+    _ensure_db()
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, stock_code, stock_name, rec_date, rec_price
+            FROM recommendations
+            WHERE status = 'Active'
+        """)
+
+        active_recs = cursor.fetchall()
+        today = datetime.date.today()
+
+        for rec_id, stock_code, stock_name, rec_date_str, rec_price in active_recs:
+            rec_date = datetime.datetime.strptime(rec_date_str, '%Y-%m-%d').date()
+            days_tracked = (today - rec_date).days
+
+            if days_tracked > 14:
+                cursor.execute("UPDATE recommendations SET status = 'Closed' WHERE id = ?", (rec_id,))
+                logger.info(f"Closed tracking: {stock_name} (T+{days_tracked})")
                 continue
-                
-            close_price = current_data['close']
-            daily_change_pct = current_data.get('change_pct', 0)
-            
-            # Calculate cumulative return
-            cumulative_return = (close_price - rec_price) / rec_price * 100
-            
-            # Get historical max/min for this recommendation
-            cursor.execute("""
-                SELECT MAX(close_price), MIN(close_price) 
-                FROM daily_performance 
-                WHERE rec_id = ?
-            """, (rec_id,))
-            
-            hist_max, hist_min = cursor.fetchone()
-            max_high = max(close_price, hist_max or close_price)
-            min_low = min(close_price, hist_min or close_price)
-            
-            # Calculate max drawdown from recommendation price
-            max_drawdown = (min_low - rec_price) / rec_price * 100
-            
-            # Insert/update daily performance
-            cursor.execute("""
-                INSERT OR REPLACE INTO daily_performance 
-                (rec_id, trade_date, close_price, daily_change_pct, cumulative_return, max_drawdown, max_high)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (rec_id, today, close_price, daily_change_pct, cumulative_return, max_drawdown, max_high))
-            
-            # Note: No auto-close on stop-loss - keep all stocks for full 10-day tracking period
-            
-        except Exception as e:
-            print(f"Error updating {stock_name}: {e}")
-            continue
-    
-    conn.commit()
-    conn.close()
-    print(f"✅ Updated {len(active_recs)} active recommendations")
+
+            try:
+                current_data = stock_data_fetcher(stock_code)
+                if not current_data:
+                    continue
+
+                close_price = current_data['close']
+                daily_change_pct = current_data.get('change_pct', 0)
+                cumulative_return = (close_price - rec_price) / rec_price * 100
+
+                cursor.execute("""
+                    SELECT MAX(close_price), MIN(close_price)
+                    FROM daily_performance
+                    WHERE rec_id = ?
+                """, (rec_id,))
+
+                hist_max, hist_min = cursor.fetchone()
+                max_high = max(close_price, hist_max or close_price)
+                min_low = min(close_price, hist_min or close_price)
+                max_drawdown = (min_low - rec_price) / rec_price * 100
+
+                cursor.execute("""
+                    INSERT OR REPLACE INTO daily_performance
+                    (rec_id, trade_date, close_price, daily_change_pct, cumulative_return, max_drawdown, max_high)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (rec_id, today, close_price, daily_change_pct, cumulative_return, max_drawdown, max_high))
+
+            except Exception as e:
+                logger.warning(f"Error updating {stock_name}: {e}")
+                continue
+
+    logger.info(f"Updated {len(active_recs)} active recommendations")
 
 def get_active_recommendations() -> pd.DataFrame:
     """Get all active recommendations with latest performance (deduplicated)"""
-    conn = sqlite3.connect(DB_PATH)
-    
+    _ensure_db()
+
     query = """
-        SELECT 
+        SELECT
             r.id,
             r.stock_code,
             r.stock_name,
@@ -307,22 +320,22 @@ def get_active_recommendations() -> pd.DataFrame:
         WHERE r.status = 'Active'
         ORDER BY r.rec_date DESC, r.id DESC
     """
-    
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    
-    # Deduplicate by stock_code to show cleaning list
-    if not df.empty:
-        df = df.drop_duplicates(subset=['stock_code'], keep='first')
-        
+
+    with get_db_connection() as conn:
+        df = pd.read_sql_query(query, conn)
+
+        # Deduplicate by stock_code to show cleaning list
+        if not df.empty:
+            df = df.drop_duplicates(subset=['stock_code'], keep='first')
+
     return attach_market_performance(df)
 
 def get_closed_recommendations(days: int = 30) -> pd.DataFrame:
     """Get recently closed recommendations (deduplicated by stock code)"""
-    conn = sqlite3.connect(DB_PATH)
-    
+    _ensure_db()
+
     query = """
-        SELECT 
+        SELECT
             r.id,
             r.stock_code,
             r.stock_name,
@@ -347,29 +360,29 @@ def get_closed_recommendations(days: int = 30) -> pd.DataFrame:
         AND julianday('now') - julianday(r.rec_date) <= ?
         ORDER BY r.rec_date DESC
     """
-    
-    df = pd.read_sql_query(query, conn, params=(days,))
-    conn.close()
-    
-    # Deduplicate by stock_code, keeping only the most recent record
-    if not df.empty:
-        df = df.drop_duplicates(subset=['stock_code'], keep='first')
-    
+
+    with get_db_connection() as conn:
+        df = pd.read_sql_query(query, conn, params=(days,))
+
+        # Deduplicate by stock_code, keeping only the most recent record
+        if not df.empty:
+            df = df.drop_duplicates(subset=['stock_code'], keep='first')
+
     return attach_market_performance(df)
 
 def calculate_strategy_metrics(strategy_tag: str = None) -> Dict:
     """Calculate win rate and performance metrics by strategy"""
-    conn = sqlite3.connect(DB_PATH)
-    
+    _ensure_db()
+
     if strategy_tag:
         where_clause = "WHERE r.strategy_tag = ?"
         params = (strategy_tag,)
     else:
         where_clause = ""
         params = ()
-    
+
     query = f"""
-        SELECT 
+        SELECT
             r.strategy_tag,
             COUNT(*) as total_recs,
             AVG(dp.cumulative_return) as avg_return,
@@ -391,13 +404,13 @@ def calculate_strategy_metrics(strategy_tag: str = None) -> Dict:
         {where_clause}
         GROUP BY r.strategy_tag
     """
-    
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
-    
+
+    with get_db_connection() as conn:
+        df = pd.read_sql_query(query, conn, params=params)
+
     if df.empty:
         return {}
-    
+
     metrics = {}
     for _, row in df.iterrows():
         tag = row['strategy_tag'] or 'Unknown'
@@ -413,8 +426,11 @@ def calculate_strategy_metrics(strategy_tag: str = None) -> Dict:
     
     return metrics
 
-# Initialize database on import (also runs migrations for existing DBs)
-init_database()
+# v11.0: Lazy initialization — init on first use, not on import
+def _ensure_db():
+    """Ensure database is initialized before any operation."""
+    if not _db_initialized:
+        init_database()
 
 # --- v7.1 CSV Sync Module ---
 
@@ -424,92 +440,91 @@ def sync_from_csv(csv_path="siphon_strategy_results.csv", rec_date=None):
     Reads 'Date' from CSV if available, falling back to CLI arg or today.
     Overwrites previous runs on the same day by pruning outdated records.
     """
+    _ensure_db()
+
     if not os.path.exists(csv_path):
-        print(f"❌ CSV not found: {csv_path}")
+        logger.error(f"CSV not found: {csv_path}")
         return 0
-    
+
     default_date = rec_date if rec_date else datetime.date.today().strftime("%Y-%m-%d")
-    
+
     df = pd.read_csv(csv_path)
-    print(f"📥 Reading {len(df)} records from {csv_path}")
-    
+    logger.info(f"Reading {len(df)} records from {csv_path}")
+
     inserted = 0
     updated = 0
     deleted = 0
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
+
     # Track which dates and stocks are in the current run
     current_runs = {}
-    
+
     for _, row in df.iterrows():
         stock_code = str(row.get('Symbol', '')).zfill(6)
         row_date = row.get('Date', default_date)
         if pd.isna(row_date):
             row_date = default_date
-            
+
         if not stock_code or pd.isna(row.get('Price')) or float(row.get('Price', 0)) <= 0:
             continue
-            
+
         if row_date not in current_runs:
             current_runs[row_date] = set()
         current_runs[row_date].add(stock_code)
-        
+
     # If the CSV is empty, we should still prune for the default date
     if not current_runs:
         current_runs[default_date] = set()
-        
-    # Phase 1: Prune records from the same day that are no longer in the CSV
-    for r_date, valid_codes in current_runs.items():
-        cursor.execute("SELECT id, stock_code FROM recommendations WHERE rec_date = ?", (r_date,))
-        for rec_id, db_code in cursor.fetchall():
-            if db_code not in valid_codes:
-                cursor.execute("DELETE FROM daily_performance WHERE rec_id = ?", (rec_id,))
-                cursor.execute("DELETE FROM recommendations WHERE id = ?", (rec_id,))
-                deleted += 1
-                
-    # Phase 2: Insert or Update valid records
-    for _, row in df.iterrows():
-        stock_code = str(row.get('Symbol', '')).zfill(6)
-        stock_name = row.get('Name', 'Unknown')
-        rec_price = float(row.get('Price', 0))
-        siphon_score = float(row.get('AG_Score', 0))
-        industry = row.get('Industry', 'Unknown')
-        strategy_tag = row.get('Strategy', 'Siphon')
-        core_logic = row.get('Logic', 'Daily Candidate')
-        
-        row_date = row.get('Date', default_date)
-        if pd.isna(row_date):
-            row_date = default_date
-            
-        if not stock_code or rec_price <= 0:
-            continue
-            
-        cursor.execute(
-            "SELECT id FROM recommendations WHERE stock_code = ? AND rec_date = ?",
-            (stock_code, row_date)
-        )
-        existing = cursor.fetchone()
-        
-        if existing:
-            cursor.execute("""
-                UPDATE recommendations 
-                SET rec_price = ?, siphon_score = ?, strategy_tag = ?, industry = ?, core_logic = ?
-                WHERE id = ?
-            """, (rec_price, siphon_score, strategy_tag, industry, core_logic, existing[0]))
-            updated += 1
-        else:
-            cursor.execute("""
-                INSERT INTO recommendations (stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (stock_code, stock_name, rec_price, row_date, strategy_tag, siphon_score, industry, core_logic))
-            inserted += 1
-            
-    conn.commit()
-    conn.close()
-    
-    print(f"✅ Sync complete: {inserted} inserted, {updated} updated, {deleted} pruned for {default_date}")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # Phase 1: Prune records from the same day that are no longer in the CSV
+        for r_date, valid_codes in current_runs.items():
+            cursor.execute("SELECT id, stock_code FROM recommendations WHERE rec_date = ?", (r_date,))
+            for rec_id, db_code in cursor.fetchall():
+                if db_code not in valid_codes:
+                    cursor.execute("DELETE FROM daily_performance WHERE rec_id = ?", (rec_id,))
+                    cursor.execute("DELETE FROM recommendations WHERE id = ?", (rec_id,))
+                    deleted += 1
+
+        # Phase 2: Insert or Update valid records
+        for _, row in df.iterrows():
+            stock_code = str(row.get('Symbol', '')).zfill(6)
+            stock_name = row.get('Name', 'Unknown')
+            rec_price = float(row.get('Price', 0))
+            siphon_score = float(row.get('AG_Score', 0))
+            industry = row.get('Industry', 'Unknown')
+            strategy_tag = row.get('Strategy', 'Siphon')
+            core_logic = row.get('Logic', 'Daily Candidate')
+
+            row_date = row.get('Date', default_date)
+            if pd.isna(row_date):
+                row_date = default_date
+
+            if not stock_code or rec_price <= 0:
+                continue
+
+            cursor.execute(
+                "SELECT id FROM recommendations WHERE stock_code = ? AND rec_date = ?",
+                (stock_code, row_date)
+            )
+            existing = cursor.fetchone()
+
+            if existing:
+                cursor.execute("""
+                    UPDATE recommendations
+                    SET rec_price = ?, siphon_score = ?, strategy_tag = ?, industry = ?, core_logic = ?
+                    WHERE id = ?
+                """, (rec_price, siphon_score, strategy_tag, industry, core_logic, existing[0]))
+                updated += 1
+            else:
+                cursor.execute("""
+                    INSERT INTO recommendations (stock_code, stock_name, rec_price, rec_date, strategy_tag, siphon_score, industry, core_logic)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (stock_code, stock_name, rec_price, row_date, strategy_tag, siphon_score, industry, core_logic))
+                inserted += 1
+
+    logger.info(f"Sync complete: {inserted} inserted, {updated} updated, {deleted} pruned for {default_date}")
     return inserted + updated
 
 # --- CLI Entry Point ---

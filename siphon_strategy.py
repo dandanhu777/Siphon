@@ -8,10 +8,27 @@ import functools
 import warnings
 import pickle
 import random
+import logging
+
+# --- v11.0: Unified logging configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
+logger = logging.getLogger("SiphonSystem")
 
 
 # --- Global Configuration & Patching ---
 import requests_patch
+
+# --- v12.0: Advanced modules (from loop-win-2026) ---
+from deep_factors import DeepFactorEngine
+from regime_sensor import RegimeSensor
+from vwap_calc import VWAPCalc
+from crowd_detector import CrowdingDetector
+from strategy_reversal import ReversalScanner
+from scoring_engine import calc_enhanced_composite, get_enhanced_confidence_grade
 
 # --- Configuration ---
 CACHE_DIR = "data_cache"
@@ -143,35 +160,89 @@ def get_industry_data_robustly():
     return pd.DataFrame()
 
 
-def fetch_target_industry_pool():
-    """v10.1: Fetch all stocks belonging to TARGET_INDUSTRIES using batch industry API.
+def fetch_hot_industries_dynamic(top_n=5):
+    """v11.0: Dynamically detect today's hottest industry sectors.
+
+    Scans real-time industry board performance and returns the top N
+    gaining industries as a bonus pool to supplement TARGET_INDUSTRIES.
+    """
+    try:
+        df = ak.stock_board_industry_name_em()
+        if df is None or df.empty:
+            return []
+
+        # Find change/gain column
+        change_col = None
+        for col in df.columns:
+            if '涨跌' in str(col) and '幅' in str(col):
+                change_col = col
+                break
+        if change_col is None:
+            # Fallback: try numeric columns
+            for col in df.columns:
+                if df[col].dtype in ['float64', 'int64'] and col != '序号':
+                    change_col = col
+                    break
+
+        if change_col is None:
+            return []
+
+        name_col = None
+        for col in df.columns:
+            if '板块' in str(col) or '名称' in str(col):
+                name_col = col
+                break
+        if name_col is None:
+            name_col = df.columns[1]  # fallback
+
+        df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
+        top_industries = df.nlargest(top_n, change_col)[name_col].tolist()
+
+        # Filter out already-included target industries
+        bonus = [ind for ind in top_industries if ind not in TARGET_INDUSTRIES]
+        return bonus
+    except Exception as e:
+        print(f"  ⚠️ 动态行业检测失败: {e}")
+        return []
+
+
+def fetch_target_industry_pool(include_dynamic=True):
+    """v11.0: Fetch stocks from TARGET_INDUSTRIES (base) + dynamic hot industries (bonus).
     Returns a DataFrame with columns ['Symbol', 'Name', 'Industry'].
-    Reliable: ~11 requests total instead of 5000."""
+    Reliable: ~11+ requests total instead of 5000."""
     pool_dfs = []
-    print(f"🔍 Fetching component stocks for {len(TARGET_INDUSTRIES)} target industries...")
-    
-    for industry in TARGET_INDUSTRIES:
+
+    # v11.0: Merge base + dynamic hot industries
+    all_industries = list(TARGET_INDUSTRIES)
+    dynamic_industries = []
+    if include_dynamic:
+        dynamic_industries = fetch_hot_industries_dynamic(top_n=5)
+        if dynamic_industries:
+            all_industries.extend(dynamic_industries)
+            print(f"🔥 动态热门行业 (bonus pool): {', '.join(dynamic_industries)}")
+
+    print(f"🔍 Fetching component stocks for {len(all_industries)} industries (base {len(TARGET_INDUSTRIES)} + bonus {len(dynamic_industries)})...")
+
+    for industry in all_industries:
         try:
-            # This API returns all stocks in the specified industry board
             df = ak.stock_board_industry_cons_em(symbol=industry)
             if df is not None and not df.empty:
-                # Standardize columns: '代码' -> 'Symbol', '名称' -> 'Name'
                 df = df[['代码', '名称']].copy()
                 df.columns = ['Symbol', 'Name']
-                # Clean up Symbol column (remove any sh/sz prefix if present, though EM normally doesn't have them)
                 df['Symbol'] = df['Symbol'].astype(str).str.zfill(6)
                 df['Industry'] = industry
                 pool_dfs.append(df)
-                print(f"   ✅ {industry}: {len(df)} stocks")
+                tag = "🌟" if industry in dynamic_industries else "✅"
+                print(f"   {tag} {industry}: {len(df)} stocks")
             else:
                 print(f"   ⚠️ {industry}: No stocks found via EM")
         except Exception as e:
             print(f"   ❌ Error fetching {industry}: {e}")
-        time.sleep(1.0) 
-        
+        time.sleep(1.0)
+
     if not pool_dfs:
         return pd.DataFrame()
-        
+
     full_pool = pd.concat(pool_dfs, ignore_index=True)
     full_pool = full_pool.drop_duplicates(subset=['Symbol'])
     print(f"📊 Total industry pool: {len(full_pool)} stocks")
@@ -192,7 +263,8 @@ def fetch_industry_per_stock(symbols):
             age_hours = (time.time() - os.path.getmtime(CACHE_PATH)) / 3600
             if age_hours < CACHE_TTL_HOURS:
                 industry_map = pd.read_pickle(CACHE_PATH)
-        except Exception: pass
+        except Exception as e:
+            print(f"  Cache load warning: {e}")
 
     # Fetch missing symbols
     missing = [s for s in symbols if s not in industry_map]
@@ -217,7 +289,8 @@ def fetch_industry_per_stock(symbols):
     try:
         if not os.path.exists(CACHE_DIR): os.makedirs(CACHE_DIR)
         pd.to_pickle(industry_map, CACHE_PATH)
-    except Exception: pass
+    except Exception as e:
+        print(f"  Cache save warning: {e}")
 
     return industry_map
 
@@ -793,6 +866,52 @@ def calc_vcp_breakout(stock_hist):
             
     return score, is_vcp
 
+
+def calc_limit_up_gene(stock_hist, lookback=20):
+    """v11.0: Limit-Up Gene Factor (连板基因) — bonus scoring (0-15).
+
+    Evaluates:
+    1. Has the stock hit limit-up in the past N days? (+5 base)
+    2. How early in the day did the limit-up occur? (proxy: high == close) (+3)
+    3. Day-after premium rate for the most recent limit-up day (+7 max)
+    """
+    if stock_hist is None or len(stock_hist) < lookback:
+        return 0.0, False
+
+    recent = stock_hist.tail(lookback)
+    score = 0.0
+    had_limit_up = False
+
+    # Detect limit-up days (change_pct >= 9.5% for main board, >= 19.5% for STAR/ChiNext)
+    limit_up_days = recent[recent['change_pct'] >= 9.5]
+
+    if len(limit_up_days) == 0:
+        return 0.0, False
+
+    had_limit_up = True
+    score += 5.0  # Base: had a limit-up in the lookback period
+
+    # Check most recent limit-up quality
+    last_lu = limit_up_days.iloc[-1]
+
+    # Proxy for early seal: close == high (strong buying pressure, sealed at limit)
+    if last_lu['close'] >= last_lu['high'] * 0.999:
+        score += 3.0  # Tight seal — likely early limit-up
+
+    # Day-after premium: find the bar right after the limit-up
+    lu_idx = stock_hist.index.get_loc(last_lu.name)
+    if lu_idx + 1 < len(stock_hist):
+        next_day = stock_hist.iloc[lu_idx + 1]
+        premium = next_day['change_pct']
+        # Positive premium after limit-up = strong continuation gene
+        if premium > 3.0:
+            score += 7.0
+        elif premium > 0:
+            score += 4.0
+
+    return round(min(score, 15.0), 1), had_limit_up
+
+
 def calc_sector_momentum(pool_df, industry_col='Industry'):
     """v6.0: Sector momentum with per-stock ranking within sector.
     Returns hot_sectors list AND a dict mapping industry -> stock rankings.
@@ -842,21 +961,153 @@ def calc_sector_leader_score(symbol, is_hot_sector, sector_rankings):
     else:
         return 2.0   # In hot sector but not leading
 
-def calc_composite_score(ag_score, micro_mom_score, inst_score, vcp_score):
-    """v10.0: Ultra-Short-Term Extreme Burst (0-100).
+def detect_market_regime(index_hist):
+    """v11.0: Detect market regime from recent index performance.
 
-    Weight allocation:
+    Returns: (regime, index_5d_change)
+        regime: 'bull' / 'bear' / 'neutral'
+        index_5d_change: 5-day cumulative change %
+    """
+    if index_hist is None or len(index_hist) < 6:
+        return 'neutral', 0.0
+
+    closes = index_hist['close']
+    change_5d = (closes.iloc[-1] / closes.iloc[-6] - 1) * 100
+
+    if change_5d >= 3.0:
+        return 'bull', round(change_5d, 2)
+    elif change_5d <= -3.0:
+        return 'bear', round(change_5d, 2)
+    else:
+        return 'neutral', round(change_5d, 2)
+
+
+def fetch_market_sentiment():
+    """v11.0: Fetch macro sentiment factors as a global confidence multiplier.
+
+    Returns: (multiplier, sentiment_details)
+        multiplier: 0.7 ~ 1.3 (dampens or amplifies confidence)
+        sentiment_details: dict with individual factor readings
+    """
+    details = {}
+    sentiment_score = 0  # -3 (extreme fear) to +3 (extreme greed)
+
+    # Factor 1: Northbound capital flow (沪深港通)
+    try:
+        hsgt_df = ak.stock_hsgt_hist_em(symbol="沪深港通")
+        if hsgt_df is not None and len(hsgt_df) >= 1:
+            # Get latest day net inflow (in 亿元)
+            latest = hsgt_df.iloc[-1]
+            # Column name varies; try common patterns
+            flow_col = None
+            for col in hsgt_df.columns:
+                if '净' in str(col) and '流' in str(col):
+                    flow_col = col
+                    break
+            if flow_col is None:
+                flow_col = hsgt_df.columns[1]  # fallback to second column
+
+            net_flow = float(latest[flow_col])
+            details['northbound_flow'] = round(net_flow, 2)
+            if net_flow > 50:
+                sentiment_score += 1
+            elif net_flow > 100:
+                sentiment_score += 2
+            elif net_flow < -50:
+                sentiment_score -= 1
+            elif net_flow < -100:
+                sentiment_score -= 2
+    except Exception as e:
+        print(f"  ⚠️ 北向资金获取失败: {e}")
+        details['northbound_flow'] = None
+
+    # Factor 2: Limit-up / limit-down count (涨停/跌停数)
+    try:
+        zt_df = ak.stock_zt_pool_em(date=datetime.datetime.now().strftime('%Y%m%d'))
+        limit_up_count = len(zt_df) if zt_df is not None else 0
+        details['limit_up_count'] = limit_up_count
+        if limit_up_count >= 80:
+            sentiment_score += 1  # Hot market
+        elif limit_up_count <= 20:
+            sentiment_score -= 1  # Cold market
+    except Exception:
+        details['limit_up_count'] = None
+
+    try:
+        dt_df = ak.stock_zt_pool_zbgc_em(date=datetime.datetime.now().strftime('%Y%m%d'))
+        limit_down_count = len(dt_df) if dt_df is not None else 0
+        details['limit_down_count'] = limit_down_count
+        if limit_down_count >= 30:
+            sentiment_score -= 1  # Panic
+    except Exception:
+        details['limit_down_count'] = None
+
+    # Factor 3: Market-wide fund flow
+    try:
+        flow_df = ak.stock_main_fund_flow()
+        if flow_df is not None and len(flow_df) >= 1:
+            # Main force net inflow for the market
+            latest = flow_df.iloc[0]
+            for col in flow_df.columns:
+                if '净' in str(col) and '额' in str(col):
+                    main_flow = float(latest[col])
+                    details['main_fund_flow'] = round(main_flow / 1e8, 2)  # Convert to 亿
+                    if main_flow > 0:
+                        sentiment_score += 1
+                    break
+    except Exception:
+        details['main_fund_flow'] = None
+
+    # Convert sentiment_score to multiplier
+    # -3 → 0.7, 0 → 1.0, +3 → 1.3
+    multiplier = 1.0 + (sentiment_score * 0.1)
+    multiplier = max(0.7, min(1.3, multiplier))
+    details['raw_score'] = sentiment_score
+
+    return round(multiplier, 2), details
+
+
+# Default weight allocation
+DEFAULT_WEIGHTS = {
+    'inst_burst': 40,
+    'micro_mom': 25,
+    'antigravity': 20,
+    'vcp': 15,
+}
+
+# Market-regime-adaptive weight adjustments
+REGIME_WEIGHT_ADJUSTMENTS = {
+    'bull':    {'inst_burst': 0, 'micro_mom': +10, 'antigravity': -10, 'vcp': 0},
+    'bear':    {'inst_burst': -10, 'micro_mom': 0, 'antigravity': +10, 'vcp': 0},
+    'neutral': {'inst_burst': 0, 'micro_mom': 0, 'antigravity': 0, 'vcp': 0},
+}
+
+
+def get_regime_weights(regime='neutral'):
+    """v11.0: Return adjusted weight caps based on market regime."""
+    adj = REGIME_WEIGHT_ADJUSTMENTS.get(regime, REGIME_WEIGHT_ADJUSTMENTS['neutral'])
+    return {k: DEFAULT_WEIGHTS[k] + adj[k] for k in DEFAULT_WEIGHTS}
+
+
+def calc_composite_score(ag_score, micro_mom_score, inst_score, vcp_score, regime='neutral'):
+    """v11.0: Ultra-Short-Term Extreme Burst (0-100) with market-adaptive weights.
+
+    Default weight allocation:
     1. Institutional Burst (Volume/Price/Sector) — 40pts
     2. Micro-Momentum (3D/5D Alpha)              — 25pts
     3. Antigravity (Resilience)                  — 20pts
     4. VCP / Squeeze Breakout                    — 15pts
-    """
-    score = 0.0
 
-    score += inst_score                    # 0-40
-    score += micro_mom_score               # 0-25
-    score += min(ag_score * 2.0, 20.0)     # 0-20 (ag_score natively around 0-10)
-    score += vcp_score                     # 0-15
+    Bull regime: Momentum +10, AG -10
+    Bear regime: AG +10, Burst -10
+    """
+    w = get_regime_weights(regime)
+
+    score = 0.0
+    score += min(inst_score, w['inst_burst'])                           # capped by regime weight
+    score += min(micro_mom_score, w['micro_mom'])                       # capped by regime weight
+    score += min(ag_score * 2.0, float(w['antigravity']))               # ag_score natively 0-10
+    score += min(vcp_score, w['vcp'])                                   # capped by regime weight
 
     return round(min(score, 100.0), 1)
 
@@ -961,6 +1212,39 @@ def _filter_technicals(hist, change_pct, realtime_change_pct, turnover_rate=None
 
     return True, rsi, stock_3d, vcp_signal
 
+
+def calc_ma_alignment_score(stock_hist):
+    """v11.0: MA Alignment Cycle Filter (周期过滤器).
+
+    Scores based on MA5/MA20/MA60 alignment:
+    - Full bull alignment (MA5 > MA20 > MA60): +10 bonus
+    - Partial alignment (MA5 > MA20 only):     +5 bonus
+    - Bear alignment (MA5 < MA20 < MA60):      -5 penalty
+    - Neutral/mixed:                            0
+
+    Returns: (score_adjustment, alignment_label)
+    """
+    if stock_hist is None or len(stock_hist) < 60:
+        return 0.0, 'insufficient_data'
+
+    close = stock_hist['close']
+    ma5 = close.rolling(5).mean().iloc[-1]
+    ma20 = close.rolling(20).mean().iloc[-1]
+    ma60 = close.rolling(60).mean().iloc[-1]
+
+    if pd.isna(ma5) or pd.isna(ma20) or pd.isna(ma60):
+        return 0.0, 'na'
+
+    if ma5 > ma20 > ma60:
+        return 10.0, '多头排列'
+    elif ma5 > ma20:
+        return 5.0, '短多'
+    elif ma5 < ma20 < ma60:
+        return -5.0, '空头排列'
+    else:
+        return 0.0, '震荡'
+
+
 def _save_and_report(results, csv_path, last_trading_date):
     """Save results to CSV, track in Boomerang, call Commander."""
     if not results:
@@ -1025,6 +1309,29 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
 
     last_trading_date = index_df['date'].iloc[-1]
     print(f"📅 Effective Analysis Date: {last_trading_date}")
+
+    # v12.0: ATR-based Regime Sensor (from loop-win-2026)
+    regime_sensor = RegimeSensor()
+    regime_sensor.detect(index_df)
+    regime, idx_5d_chg = detect_market_regime(index_df)
+    regime_weights = get_regime_weights(regime)
+    regime_labels = {'bull': '牛市', 'bear': '熊市', 'neutral': '震荡'}
+    print(f"📊 市场状态: {regime_labels[regime]} (5日涨跌: {idx_5d_chg:+.2f}%)")
+    print(f"   ATR状态: {regime_sensor.get_summary()}")
+    print(f"   权重分配: Burst={regime_weights['inst_burst']} Mom={regime_weights['micro_mom']} AG={regime_weights['antigravity']} VCP={regime_weights['vcp']}")
+
+    # v12.0: 初始化深度因子引擎和拥挤度检测
+    deep_engine = DeepFactorEngine()
+    crowd_detector = CrowdingDetector()
+    reversal_scanner = ReversalScanner()
+
+    # v11.0: Market sentiment multiplier
+    sentiment_mult, sentiment_details = fetch_market_sentiment()
+    print(f"🌡️ 市场情绪乘数: {sentiment_mult}x (原始分: {sentiment_details.get('raw_score', 'N/A')})")
+    if sentiment_details.get('northbound_flow') is not None:
+        print(f"   北向资金: {sentiment_details['northbound_flow']}亿")
+    if sentiment_details.get('limit_up_count') is not None:
+        print(f"   涨停数: {sentiment_details['limit_up_count']}")
 
     # v6.0: Sector momentum pre-filter with per-stock rankings
     hot_sectors, sector_stats, sector_rankings = calc_sector_momentum(pool)
@@ -1099,25 +1406,77 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
         # v10.0: VCP Breakout
         vcp_score, is_vcp_breakout = calc_vcp_breakout(hist)
 
-        # v10.0: Composite Score (0-100) specifically for Ultra-Short Burst
-        composite = calc_composite_score(ag_score, micro_mom_score, inst_score, vcp_score)
-        
-        if composite < cfg.min_composite_score:
+        # v11.0: Limit-Up Gene (连板基因) — bonus factor
+        lu_gene_score, had_limit_up = calc_limit_up_gene(hist)
+
+        # v11.0: MA Alignment (周期过滤器) — bonus/penalty
+        ma_align_score, ma_align_label = calc_ma_alignment_score(hist)
+
+        # v12.0: 深度因子计算
+        deep_score = None
+        deep_factors = {}
+        try:
+            deep_factors = deep_engine.compute_for_stock(symbol, hist, index_df)
+            # 简化计算deep_score: 各因子z-score等权
+            factor_vals = [v for v in deep_factors.values() if v is not None]
+            if factor_vals:
+                arr = np.array(factor_vals)
+                mean_v, std_v = arr.mean(), arr.std()
+                if std_v > 0:
+                    z_mean = ((arr - mean_v) / std_v).clip(-3, 3).mean()
+                    deep_score = float(z_mean * 20 + 50)
+                else:
+                    deep_score = 50.0
+        except Exception:
+            deep_score = None
+
+        # v12.0: VWAP评分
+        vwap = VWAPCalc.calc_daily_vwap(hist, window=5)
+        vwap_score = VWAPCalc.calc_vwap_score(current_price, vwap)
+
+        # v12.0: 增强版综合评分 (融合深度因子 + VWAP)
+        composite = calc_enhanced_composite(
+            ag_score, micro_mom_score, inst_score, vcp_score,
+            deep_score=deep_score, vwap_score=vwap_score, regime=regime
+        )
+
+        # v11.0: Add bonus factors (limit-up gene + MA alignment)
+        composite = round(min(max(composite + lu_gene_score + ma_align_score, 0), 100.0), 1)
+
+        # v11.0: Apply sentiment multiplier to composite score
+        composite_raw = composite
+        composite = round(min(composite * sentiment_mult, 100.0), 1)
+
+        # v12.0: ATR regime阈值调整
+        regime_threshold = cfg.min_composite_score * regime_sensor.get_threshold_mult()
+        if composite < regime_threshold:
             continue
-        
+
         # Build signal tags
         signal_tags = []
         if inst_score >= 25: signal_tags.append(f"爆量突袭{vol_ratio:.1f}x")
-        if micro_mom_score >= 15: signal_tags.append("强势连击🚀")
+        if micro_mom_score >= 15: signal_tags.append("强势连击")
         if is_closing_high: signal_tags.append("光头阳")
         if is_vcp_breakout: signal_tags.append("老鸭头突破")
-        if ag_score >= 4: signal_tags.append("金身免伤防御盾")
+        if ag_score >= 4: signal_tags.append("金身防御盾")
         if is_hot_sector: signal_tags.append("主线共振")
+        if had_limit_up: signal_tags.append("连板基因")
+        if ma_align_label == '多头排列': signal_tags.append("多头排列")
+        # v12.0: 深度因子标签
+        if deep_factors.get('resid_mom') and deep_factors['resid_mom'] > 0.005:
+            signal_tags.append("残差动量+")
+        if deep_factors.get('lu_strength') and deep_factors['lu_strength'] > 0.05:
+            signal_tags.append("封板坚定")
+        if vwap_score >= 8:
+            signal_tags.append("VWAP强势")
         signal_str = " ".join(signal_tags) if signal_tags else "Momentum"
 
         vol_note = f"VolR:{vol_ratio:.1f}x Burst:{inst_score:.0f}"
 
         symbol_str = str(symbol).zfill(6)
+
+        # v12.0: 增强版信心评级
+        grade, grade_label, grade_color = get_enhanced_confidence_grade(composite, regime)
 
         results.append({
             'Symbol': symbol_str,
@@ -1127,18 +1486,101 @@ def run_siphoner_strategy(market='CN', cfg=CONFIG):
             'Price': float(current_price),
             'Change_Pct': change_pct,
             'AG_Score': composite,
-            'Strategy': signal_str, # v10.1: Align with tracker
-            'Logic': signal_str,    # v10.1: Align with tracker
+            'Strategy': signal_str,
+            'Logic': signal_str,
             'Volume_Note': vol_note,
             'RS_Score': micro_mom_score,
             'Vol_Explosion': vol_ratio,
             'Momentum_Accel': vcp_score,
             'Sector_Leader': is_hot_sector,
             'Flow_Ratio': inst_score,
-            'Composite': composite
+            'Composite': composite,
+            'Grade': grade,
+            'Grade_Label': grade_label,
+            'MA_Alignment': ma_align_label,
+            'Deep_Score': deep_score,
+            'VWAP_Score': vwap_score,
+            'Regime': regime_sensor.get_regime_label(),
         })
-        print(f"MATCH {name}: C={composite} Mom={micro_mom_score:.1f} Burst={inst_score:.0f} VCP={vcp_score:.0f} Sector={is_hot_sector}")
+        print(f"MATCH {name}: [{grade}] C={composite} Mom={micro_mom_score:.1f} Burst={inst_score:.0f} Deep={deep_score or 'N/A'} VWAP={vwap_score:.0f} MA={ma_align_label}")
     
+    # v12.0: 拥挤度过滤 — 移除高相关性推荐
+    if results and len(results) >= 3:
+        try:
+            rec_klines = {}
+            for r in results:
+                kdf = kline_cache.get(r['Symbol']) if kline_cache else None
+                if kdf is not None:
+                    rec_klines[r['Symbol']] = kdf
+            if len(rec_klines) >= 2:
+                crowd_alert = crowd_detector.check_recommendations(rec_klines)
+                print(f"🔍 拥挤度: {crowd_alert.get_label()} — {crowd_alert.action}")
+                if crowd_alert.reasons:
+                    for reason in crowd_alert.reasons:
+                        print(f"   {reason}")
+                # 移除高相关股票
+                to_remove = crowd_detector.filter_correlated_stocks(rec_klines)
+                if to_remove:
+                    before = len(results)
+                    results = [r for r in results if r['Symbol'] not in to_remove]
+                    print(f"   拥挤过滤: {before} → {len(results)} (移除{len(to_remove)}只高相关股)")
+        except Exception as e:
+            print(f"⚠️ 拥挤度检测跳过: {e}")
+
+    # v12.0: 反转策略扫描 — 补充动量信号
+    try:
+        reversal_klines = {}
+        for idx_r, row_r in pool.iterrows():
+            sym_r = str(row_r['Symbol']).zfill(6)
+            kdf_r = kline_cache.get(sym_r) if kline_cache else None
+            if kdf_r is not None and len(kdf_r) >= 25:
+                reversal_klines[sym_r] = kdf_r
+        if reversal_klines:
+            industry_map = {str(row_r['Symbol']).zfill(6): row_r['Industry']
+                           for _, row_r in pool.iterrows()}
+            reversal_signals = reversal_scanner.scan(
+                reversal_klines, hot_industries=hot_sectors, industry_map=industry_map)
+            if reversal_signals:
+                print(f"🔄 反转信号: {len(reversal_signals)}只")
+                existing_codes = {r['Symbol'] for r in results}
+                for sig in reversal_signals:
+                    if sig['stock_code'] not in existing_codes:
+                        results.append({
+                            'Symbol': sig['stock_code'],
+                            'Name': sig.get('stock_name', ''),
+                            'Date': last_trading_date,
+                            'Industry': industry_map.get(sig['stock_code'], ''),
+                            'Price': sig['rec_price'],
+                            'Change_Pct': 0,
+                            'AG_Score': sig['siphon_score'],
+                            'Strategy': sig['strategy_tag'],
+                            'Logic': sig['core_logic'],
+                            'Volume_Note': 'Reversal',
+                            'RS_Score': 0,
+                            'Vol_Explosion': 0,
+                            'Momentum_Accel': 0,
+                            'Sector_Leader': False,
+                            'Flow_Ratio': 0,
+                            'Composite': sig['siphon_score'],
+                            'Grade': 'B',
+                            'Grade_Label': '反转观察',
+                            'MA_Alignment': '',
+                            'Deep_Score': None,
+                            'VWAP_Score': 0,
+                            'Regime': regime_sensor.get_regime_label(),
+                        })
+                        print(f"  + {sig['stock_code']} {sig.get('stock_name','')} "
+                              f"Score={sig['siphon_score']:.0f} {sig['core_logic']}")
+    except Exception as e:
+        print(f"⚠️ 反转扫描跳过: {e}")
+
+    # v12.0: 打印市场状态摘要
+    print(f"\n{'='*50}")
+    print(f"📊 {regime_sensor.get_summary()}")
+    print(f"📈 动量推荐: {sum(1 for r in results if 'Reversal' not in r.get('Strategy',''))}只")
+    print(f"🔄 反转推荐: {sum(1 for r in results if 'Reversal' in r.get('Strategy',''))}只")
+    print(f"{'='*50}\n")
+
     # Step 4: Save and report
     _save_and_report(results, "siphon_strategy_results.csv", last_trading_date)
 

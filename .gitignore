@@ -22,3 +22,4 @@ backtest_result*.csv
 
 # Secrets logic
 stock_recommendation_v*.backup/
+venv/

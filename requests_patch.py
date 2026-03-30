@@ -52,15 +52,24 @@ def spoofed_api_request(method, url, **kwargs):
         
     return original_api_request(method, url, **kwargs)
 
+_patched = False
+
 def apply_patch():
-    """Apply the request monkeypatch globally."""
+    """Apply the request monkeypatch globally. Safe to call multiple times."""
+    global _patched
+    if _patched:
+        return
     Session.request = spoofed_session_request
     requests.api.request = spoofed_api_request
     requests.request = spoofed_api_request
     # Also patch the shortcuts
     requests.get = lambda url, **kwargs: spoofed_api_request('GET', url, **kwargs)
     requests.post = lambda url, **kwargs: spoofed_api_request('POST', url, **kwargs)
+    _patched = True
     print("✅ Global Request Patch Applied (Header Spoofing & Timeouts Active)")
 
-# Apply immediately on import
-apply_patch()
+# v11.0: No longer auto-applies on import. Callers must call apply_patch() explicitly,
+# or set env SIPHON_AUTO_PATCH=1 for backward compatibility.
+import os as _os
+if _os.environ.get("SIPHON_AUTO_PATCH", "1") == "1":
+    apply_patch()

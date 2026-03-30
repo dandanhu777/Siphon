@@ -82,7 +82,8 @@ def update_index_cache():
     if os.path.exists(INDEX_CACHE_FILE):
         try:
            with open(INDEX_CACHE_FILE, 'r') as f: cache = json.load(f)
-        except Exception: pass
+        except Exception as e:
+            print(f"  Index cache load warning: {e}")
         
     for key, symbol in TARGET_INDICES.items():
         print(f"   - Updating {key} ({symbol})...")
